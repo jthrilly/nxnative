@@ -121,6 +121,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** `nvn_tex.c` `level_walk`: a level at least one tile wide, high and deep is laid out with its width padded to whole tiles, the levels from the first smaller one on form the mip tail (packed as usual), and the storage is whole tiles, 64 KB aligned.
 - **Found on:** [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md): laid out unpadded, the 1024×1024 ASTC 6×6 clothes of Hinoa and Minoto (43 GOBs wide instead of 48, level 1 at 0x81000 instead of 0x90000) read 2,183 all-zero blocks in level 0 and 3,043 in level 1, which ASTC decodes as its error colour: their trousers, sleeves and gloves were magenta, worst in Kamura Village.
 
+### Sparse textures of 8- and 16-byte blocks: blocks at most 8 GOBs high
+
+- **Symptom:** crashes that move between runs (30–70% of boots, in the first minute): in the allocator, on bogus pointers, in unrelated threads. Unreal's purgatory proxy ([05-debugging](../agents/05-debugging.md)) finds freed 64 KB-aligned blocks modified; with the parked blocks read-only, the faulting store is a `memcpy` of texture mip data from the texture streamer into the buffer `RHILockTexture2D` returned.
+- **Cause:** with the automatic block height the host gave sparse textures the same block height as plain ones (16 GOBs for 96 or more block rows), so a 64 KB tile was 8 GOBs wide. For 8- and 16-byte blocks (DXT1, DXT5 and the like) the real layout uses blocks of at most 8 GOBs and so tiles 16 GOBs (1,024 bytes) wide: the game's pre-swizzled data for a 384×384 DXT5 level is 32 GOBs × two 8-GOB block rows, 0x40000 bytes, where the host's layout said 0x30000 (the padding sits at the end of each 8-GOB block in the dump). 4-byte texels keep 16-GOB blocks (a 1350×270 BGRA8 level is 88 GOBs × three 16-GOB block rows, 0x210000 bytes). Unreal's NVN RHI sizes its lock buffer from the host's level layout and copies the cooked level in at its own size, past the end of the buffer.
+- **Fix:** `nvn_tex.c` `nvn_tex_layout`: a sparse texture without a packaged layout and with 8 or more bytes per block takes a block height of at most 8 GOBs. `dm/gfx/tests/t_sparse_layout.c` checks 15 measured textures and Monster Hunter Rise's level offsets.
+- **Found on:** [Yoshi's Crafted World](../../dm/games/01006000040C2000/README.md): 9 streamed DXT5 textures (384×384 to 1920×912) overran their buffers by 0x8000–0x20000 bytes; after the fix none of 10,578 level copies did, and 10 of 10 boots ran clean.
+
 ### Sparse textures bound from their first mapped level
 
 - **Symptom:** streamed textures read 0 (magenta on Monster Hunter Rise's title screen's clothes).
