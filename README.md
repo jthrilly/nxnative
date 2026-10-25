@@ -144,7 +144,7 @@ Under each game: the IPA's size, and "60 fps with 1.2.0" where the game runs at 
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/images/unicorn-overlord.jpg" width="256" alt="Unicorn Overlord"><br>Unicorn Overlord<br><sub>~4 GB</sub></td>
-<td align="center" valign="top" width="33%"><img src="docs/images/yoshis-crafted-world.jpg" width="256" alt="Yoshi's Crafted World on Mac"><br><a href="dm/games/01006000040C2000/README.md">Yoshi's Crafted World</a><br><sub>~6.1 GB</sub></td>
+<td align="center" valign="top" width="33%"><img src="docs/images/yoshis-crafted-world.jpg" width="256" alt="Yoshi's Crafted World"><br><a href="dm/games/01006000040C2000/README.md">Yoshi's Crafted World</a><br><sub>~6.1 GB</sub></td>
 <td align="center" valign="top" width="33%"><img src="docs/images/nier-automata.png" width="256" alt="NieR:Automata The End of YoRHa Edition"><br>NieR:Automata The End of YoRHa Edition<br><sub>~10.9 GB · 60 fps with 1.0.3</sub></td>
 </tr>
 <tr>
