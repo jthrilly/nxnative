@@ -2,7 +2,7 @@
 
 Update 1.0.1 (v65536) over the base game, SDK 4.4.1. Good-Feel's game on Unreal Engine 4.18 era (project `PJ033`, one `PJ033-Switch.pak`) with Nintendo's NVN RHI. Modules `main` and `sdk`. GMalloc is a FMallocBinned on the process heap (at `0x70f5004000`; the libc StandardAllocator is at `0x70f5000000`).
 
-Status: brought up on the Mac. It boots, passes the start screen, the play-style menu and the opening, and shows the "How many Yoshis should go?" menu fully textured, with no red line; 10 of 10 muted boots ran clean for 40 s. The Yoshis' felt renders right through the opening since the streamed levels are kept (see [Rendering](#rendering)). Not tested further into a level, nor on the iPhone.
+Status: brought up on the Mac. It boots, passes the start screen, the play-style menu and the opening, and shows the "How many Yoshis should go?" menu fully textured, with no red line; 10 of 10 muted boots ran clean for 40 s. The Yoshis' felt renders right through the opening since the streamed levels are kept (see [Rendering](#rendering)). Plays into the first levels on the Mac (user); from boot with that save, the [Mac route](#mac-routes) reaches the first level's gameplay at about 120 s, with no red line over 250 s. Not tested on the iPhone yet (IPA 6.1 GB).
 
 ## What it needs
 
@@ -25,7 +25,7 @@ The Yoshis are plain lightmapped static-mesh materials (fragment key `a7c457a031
 
 ## Mac routes
 
-From boot, `A` at 22, 25, 28, 31, 34 and 55 s passes the start screen and picks Mellow Mode; `Plus` then `A` at 62–70 s skips the opening; `A` every 10 s from 83 s reaches the "How many Yoshis should go?" menu by about 120 s (`DM_CTL`, [05-debugging](../../../docs/agents/05-debugging.md)). Run with `DM_AUDIO_MUTE=1`.
+From boot, `A` at 22, 25, 28, 31, 34 and 55 s passes the start screen and picks Mellow Mode; `Plus` then `A` at 62–70 s skips the opening; `A` every 10 s from 83 s reaches the "How many Yoshis should go?" menu by about 120 s (`DM_CTL`, [05-debugging](../../../docs/agents/05-debugging.md)). With a save that has a level unlocked, the same presses continue from the menu into it.
 
 The probes that compare the lock size with the copy size: `DM_PROBE_ALL=1 DM_PROBE='main:27f5a54@x21+80,main:27f5a58@*x21+68+30,main:27f5a7c,main:2486490'` (x9 at `27f5a54` is the lock size, x0 at `27f5a7c` the buffer, x19 / x2 at `2486490` the copy's destination and size).
 
@@ -39,4 +39,4 @@ Unreal's purgatory proxy: a romfs overlay (`DM_ROMFS_OVERLAY`) with `UE4CommandL
 
 ## Open
 
-- Play into a level on the Mac; then the iPhone (3.15 GB heap: check the memory it needs there).
+- The iPhone (IPA 6.1 GB; 3.15 GB heap: check the memory it needs there).
