@@ -67,6 +67,9 @@ static void samples_xy(int s, uint32_t *sx, uint32_t *sy) {
 // storage is whole tiles, 64 KB aligned. Monster Hunter Rise's streamed textures come pre-swizzled that way in its files and are placed at the level offsets the host reports: laid out unpadded,
 // its 1024×1024 ASTC 6×6 textures (48 GOBs wide instead of 43, level 1 at 0x90000 instead of 0x81000) read 2,183 all-zero blocks in level 0 and 3,043 in level 1, which ASTC
 // decodes as its error colour (magenta clothes)
+// With the automatic block height, a sparse texture of 8- or 16-byte blocks has blocks at most 8 GOBs high, so its tile is 16 GOBs (1,024 bytes) wide; 4-byte texels keep 16-GOB
+// blocks and 8-GOB tiles. Yoshi's Crafted World ships its streamed textures pre-swizzled so: a 384×384 DXT5 level is 32 GOBs × two 8-GOB block rows (0x40000 bytes, 16-GOB blocks
+// gave 0x30000), a 1350×270 BGRA8 one 88 GOBs × three 16-GOB block rows. UE sizes its upload buffer from the host's layout, and the larger level data overran it into the heap
 enum { SPARSE_TILE = 0x10000 };
 static int sparse_of(const nvn_texdesc *d) { return (d->flags & 0x20) && !(d->flags & 0x50) && d->target != 10; }
 // Offset of level `level` from the start of its layer, and the GOB columns it is laid out with (*gobs, may be NULL)
@@ -115,7 +118,10 @@ void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
         return;
     }
     unsigned tileH = 0, tileD = 0;
-    if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = d->pkg_block_h ? (unsigned)d->pkg_block_h - 1 : pick_tile(ah * 3 / 16); }
+    if (dpl == 2) {
+        uint32_t ah = blk(h * sy, t.bh); tileH = d->pkg_block_h ? (unsigned)d->pkg_block_h - 1 : pick_tile(ah * 3 / 16);
+        if (!d->pkg_block_h && sparse_of(d) && t.bpb >= 8 && tileH > 3) tileH = 3;
+    }
     else if (dpl == 3) tileD = pick_tile(z + z / 2);
     o->tileH = tileH; o->tileD = tileD;
     unsigned levels = d->levels ? d->levels : 1;

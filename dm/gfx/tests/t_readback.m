@@ -46,6 +46,11 @@ int main(void) { @autoreleasepool {
     NVNcopyRegion region = {0, 0, 0, 8, 4, 1}; uint8_t *out = (uint8_t *)mem + 196608; memset(out, 0xEE, 256);
     h_nvnCommandBufferSetCopyRowStride(&cmd, 64);
     h_nvnCommandBufferCopyTextureToBuffer(&cmd, &tex, NULL, &region, (NVNbufferAddress)out, 0);
+    // A copy from the cleared (GPU-written) texture into a packaged texture, whose storage is where the host takes its content from: the copy's bytes are read back into the storage
+    // when the submission completes (mirror_readback), so ReadTexels, which reads a packaged texture's storage, sees the clear colour
+    NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}}; NVNtexture pk; h_nvnTextureBuilderSetPackagedTextureLayout(&tb, &lay);
+    h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 163840); EXPECT("packaged texture init", 1, h_nvnTextureInitialize(&pk, &tb));
+    h_nvnCommandBufferCopyTextureToTexture(&cmd, &tex, NULL, &region, &pk, NULL, &region, 0);
     NVNsync sync; h_nvnSyncInitialize(&sync, NULL);
     h_nvnCommandBufferFenceSync(&cmd, &sync, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd);
@@ -63,6 +68,9 @@ int main(void) { @autoreleasepool {
     EXPECT("GPU clear -> CPU ReadTexels, 32 literal pixels", 0, bad);
     EXPECT("ReadTexels used the GPU readback path", 1, device.allocations);
     EXPECT("ReadTexels releases its readback buffer before the caller's pool drains", 1, device.lastBuffer == nil);
-    h_nvnTextureFinalize(&tex); mtl_pool_del(mem); free(mem);
+    memset(cpu, 0xEE, sizeof cpu); h_nvnTextureReadTexels(&pk, NULL, &region, cpu); bad = 0;
+    for (int i=0; i<32; i++) bad += memcmp(cpu+i*4, expected, 4) != 0;
+    EXPECT("GPU copy into a packaged texture -> its storage (ReadTexels), 32 literal pixels", 0, bad);
+    h_nvnTextureFinalize(&pk); h_nvnTextureFinalize(&tex); mtl_pool_del(mem); free(mem);
     printf("READBACK cases=%d failed=%d\n", cases, failed); return failed != 0;
 } }

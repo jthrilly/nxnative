@@ -157,6 +157,8 @@ def guess(F, hooks=None):
 
     if F.get('main_markers', set()) & {'Unreal', 'Unreal 4'} and R['exts'].get('.pak') and 'nvnBootstrapLoader' in imp:
         G['shader_groups'] = ('ShaderArchive-Global-=global ShaderArchive-=game', 'the decoded shader code archives: the engine\'s global shaders and the game\'s material shaders')
+    # without virtual address memory, Unreal's nninitStartup sets a heap of the pool less used memory instead (Yoshi's Crafted World, SDK 4: 0xc5200000), which the heap region above holds
+    if 'shader_groups' in G and F['sysres']:
         G['mem_reserve'] = ('0x1028000000', 'Unreal: nninitStartup reserves a 62 GB address region and its FMallocBinned3 takes 37 GB of it, so a 64 GB alias region for the bring-up on the Mac. '
                             'An iPhone needs the allocator cut for the build and a capped region (game_args), as Octopath Traveler 0\'s profile (docs/reference/memory.md)')
         G['mem_alias'] = ('0x1008000000', '')
