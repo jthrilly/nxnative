@@ -2,7 +2,7 @@
 
 Update 1.0.1 (v65536) over the base game, SDK 4.4.1. Good-Feel's game on Unreal Engine 4.18 era (project `PJ033`, one `PJ033-Switch.pak`) with Nintendo's NVN RHI. Modules `main` and `sdk`. GMalloc is a FMallocBinned on the process heap (at `0x70f5004000`; the libc StandardAllocator is at `0x70f5000000`).
 
-Status: brought up on the Mac. It boots, passes the start screen, the play-style menu and the opening, and shows the "How many Yoshis should go?" menu fully textured, with no red line; 10 of 10 muted boots ran clean for 40 s. The Yoshis' felt renders right through the opening since the streamed levels are kept (see [Rendering](#rendering)). Plays into the first levels on the Mac (user); from boot with that save, the [Mac route](#mac-routes) reaches the first level's gameplay at about 120 s, with no red line over 250 s. Not tested on the iPhone yet (IPA 6.1 GB).
+Status: brought up on the Mac. It boots, passes the start screen, the play-style menu and the opening, and shows the "How many Yoshis should go?" menu fully textured, with no red line; 10 of 10 muted boots ran clean for 40 s. The Yoshis' felt renders right through the opening since the streamed levels are kept (see [Rendering](#rendering)). Plays into the first levels on the Mac (user); from boot with that save, the [Mac route](#mac-routes) reaches the first level's gameplay at about 120 s, with no red line over 250 s. Retested on chain `86c8282f6fb4` (upstream `ce9b30b`): all 23,497 shaders translate, and over the 150 s route the opening plays at 30 fps with no red line. Not tested on the iPhone yet (IPA 6.1 GB).
 
 ## What it needs
 
@@ -36,6 +36,7 @@ Unreal's purgatory proxy: a romfs overlay (`DM_ROMFS_OVERLAY`) with `UE4CommandL
 - [Sparse textures take the block height of their 64 KB tile](../../../docs/reference/rendering.md#sparse-textures-take-the-block-height-of-their-64-kb-tile): the crashes that moved between runs in 30–70% of boots (allocator asserts, bogus pointers) were 9 streamed DXT5 textures (384×384 to 1920×912) whose level data overran its upload buffer by 0x8000–0x20000 bytes. Found with Unreal's purgatory proxy and read-only parked blocks ([05-debugging](../../../docs/agents/05-debugging.md)).
 - [Unreal games without virtual address memory take a heap](../../../docs/reference/memory.md#unreal-games-without-virtual-address-memory-take-a-heap): the launch crash of the provisional profile.
 - [GPU copies into textures uploaded from their storage](../../../docs/reference/nvn-objects.md#gpu-copies-into-textures-uploaded-from-their-storage): the speckled felt once the opening went dark; the small levels of the streamed textures were stale or zero in the host's textures ([Rendering](#rendering)).
+- [Bounded MSL 2.3 atomic emulation](../../../docs/reference/shaders.md#bounded-msl-23-atomic-emulation): after `c3a0880`, the compute shaders `572c1b843ca32afb`, `8dbd4ee9b3da30d4` and `f0b33a6b4f3cc64f`, whose image atomics return a value (an add that hands out slots in r32ui buffer images, an exchange that swaps list heads), failed translation, and a `texture_buffer` image read as 2D stopped the host at frame 84 ("image atomics: unsupported or overflowing IMG extent"). Resolved upstream by `e72991d` (the host) and `2e655b7` (the translator).
 
 ## Open
 
