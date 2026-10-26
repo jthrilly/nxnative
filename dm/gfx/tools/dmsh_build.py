@@ -595,10 +595,20 @@ def int_inputs(src):
         if not bad and nint: out[str(loc_)] = 'uint'
     return out
 
-# vertex / pixel pairs (taken from BNSH variations by shader_split.py): vertex key → paired pixel keys
-PAIRS = collections.defaultdict(set)
-for _ln in open(GAME.table('shader_pairs.tsv')):
-    if _ln.strip() and not _ln.startswith('#'): _v, _p = _ln.split(); PAIRS[_v].add(_p)
+# Both pair tables feed pipelines, so both must feed padding, build order and shader cache keys.
+def load_pairs(game, package):
+    pairs = collections.defaultdict(set)
+    for table in ('shader_pairs.tsv', 'pso_pairs.tsv'):
+        path = str(game.table(table))
+        if table == 'pso_pairs.tsv' and not os.path.isfile(path):
+            path = os.path.join(os.path.dirname(os.path.abspath(package)), table)   # the split's copy for profiles predating this table
+        if table == 'pso_pairs.tsv' and not os.path.isfile(path): continue
+        with open(path) as f:
+            for ln in f:
+                if ln.strip() and not ln.startswith('#'): v, p = ln.split(); pairs[v].add(p)
+    return pairs
+
+PAIRS = load_pairs(GAME, dm_dir)
 
 def vs_pad(key, src):
     """Give a vertex shader the outputs its paired pixel shaders read but it does not write, with the value (0,0,0,1).
@@ -608,7 +618,8 @@ def vs_pad(key, src):
     want = set()
     for ps in PAIRS.get(key, ()):
         fn = os.path.join(out, ps + '_b.metal')
-        if os.path.exists(fn): want |= {int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', open(fn).read())}
+        if os.path.exists(fn):
+            with open(fn) as f: want |= {int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', f.read())}
     miss = sorted(want - {int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', src)})
     i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i); k = src.find('main0_out out = {};')
     if not miss or i < 0 or j < 0 or k < 0: return src, []
