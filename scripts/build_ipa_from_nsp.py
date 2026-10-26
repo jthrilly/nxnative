@@ -414,7 +414,10 @@ def scan_nsps(nsp_dir):
         low = tid & 0xFFF   # base …000, update …800, DLC = base + 0x1000 + index
         app = tid if low == 0 else tid & ~0xFFF if low == 0x800 else (tid & ~0xFFF) - 0x1000
         f = fams.setdefault(app, {'base': None, 'updates': [], 'dlc': []})
-        if low == 0: f['base'] = p
+        if p.suffix in ('.xci', '.xcz'):   # a cartridge image holds the base game whatever its name's tag says; a merged one may bundle an update (its [v<N>] tag) and DLC (extract_aoc lists them)
+            f['base'] = p                  #   Animal Crossing's "[01006F8002326800][v1769472][Base][v2.0.5][3 DLC's].xci" is tagged with the update's title ID
+            if version_of(p): f['updates'].append((version_of(p), p))   # nx_extract takes the update from the Patch meta, or the base alone when there is none (a later cartridge print)
+        elif low == 0: f['base'] = p
         elif low == 0x800: f['updates'].append((version_of(p), p))
         else: f['dlc'].append((tid, version_of(p), p))
     if len(fams) == 1 and len(unknown) == 1 and next(iter(fams.values()))['base'] is None:   # a base game converted from a cartridge may have neither tags nor a ticket; build IDs are checked afterwards
@@ -434,7 +437,7 @@ def decompress_nsz(nsp_dir, app, fam, keys, env):
     and the file is moved into nsp/ only when nsz exits 0, so a partial one is never taken for a whole one; a conversion is reused while its source has the same name, size and
     modification time. nsz -D prints an NCA hash mismatch but goes on and exits 0: nx_extract's hash check catches a damaged file (ALLOW_DAMAGED)"""
     paths = [fam['base']] + [p for _, p in fam['updates']] + [p for _, _, p in fam['dlc']]
-    todo = [p for p in paths if p.suffix in COMPRESSED]
+    todo = list(dict.fromkeys(p for p in paths if p.suffix in COMPRESSED))   # an XCZ is the base and its bundled update
     if not todo: return fam
     if importlib.util.find_spec('nsz') is None:
         raise BuildError(f'NSZ / XCZ files need the nsz tool in the current Python ({sys.executable}): pip install nsz')
@@ -821,16 +824,26 @@ def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):   # the build IDs 
     return dst
 
 
+def bundled_dlc(nx, keys, fam, logs):
+    """The DLC a base XCI holds (a merged cartridge image): [(title ID, version, XCI)] from nx_extract --list"""
+    if fam['base'].suffix != '.xci': return []
+    log = logs / 'xci_list.log'
+    run([nx, keys, '--list', fam['base']], log)
+    return [(int(t, 16), int(v), fam['base']) for t, kind, v in re.findall(r'^([0-9a-f]{16}) (\w+) v(\d+)$', log.read_text(errors='replace'), re.M) if kind == 'AddOnContent']
+
+
 def extract_aoc(nx, keys, repo, work, app, fam, logs):
-    """DLC NSPs in the folder → <id>_build/aoc/<index>/ (the RomFS of each one's data NCA; index = title ID − base − 0x1000). The host reports these indices as owned and mounts them (DM_AOC_DIR).
-    Returns None without DLC. Reused when the DLC NSPs (names, sizes and times) and nx_extract's sources are as at the last extraction (Monster Hunter Rise: 250 DLC, 30 s)"""
-    if not fam['dlc']: return None
-    tmp, dst = work / 'aoc.partial', work / 'aoc'; rmtree(tmp)
-    best = {}   # when one DLC comes in several copies, take the highest version, and the largest of equal versions
-    for tid, ver, p in fam['dlc']:
-        k = (ver or 0, p.stat().st_size)
-        if tid not in best or k > best[tid][0]: best[tid] = (k, p)
+    """DLC NSPs in the folder, and DLC bundled in a base XCI → <id>_build/aoc/<index>/ (the RomFS of each one's data NCA; index = title ID − base − 0x1000). The host reports these indices as owned and
+    mounts them (DM_AOC_DIR). Returns None without DLC. Reused when the DLC NSPs (names, sizes and times) and nx_extract's sources are as at the last extraction (Monster Hunter Rise: 250 DLC, 30 s)"""
+    if not fam['dlc'] and fam['base'].suffix != '.xci': return None
     PROG.stage('extract DLC')
+    tmp, dst = work / 'aoc.partial', work / 'aoc'; rmtree(tmp)
+    best = {}   # when one DLC comes in several copies, take the highest version, and the largest of equal versions; a DLC NSP wins over the same DLC in the XCI
+    for tid, ver, p in fam['dlc'] + bundled_dlc(nx, keys, fam, logs):
+        k = (p.suffix != '.xci', ver or 0, p.stat().st_size)
+        if tid not in best or k > best[tid][0]: best[tid] = (k, p)
+    if not best:
+        PROG.end('no DLC'); return None
     kf = work / 'aoc.key'
     key = fingerprint(sorted((tid, p.name, p.stat().st_size, p.stat().st_mtime_ns) for tid, (_, p) in best.items()), ('files', [repo / 'dm/tools/nx_extract' / f for f in ('Program.cs', 'nx_extract.csproj')]))
     if dst.is_dir() and (note := reused(kf, key)) is not None:
@@ -840,7 +853,7 @@ def extract_aoc(nx, keys, repo, work, app, fam, logs):
         idx = tid - app - 0x1000
         PROG.set(step='extracting', done=i, total=len(best), unit='DLC')
         say(f'DLC index {idx}: {p.name}')
-        run([nx, keys, '--aoc', p, tmp / str(idx)], logs / f'aoc_{idx}.log')
+        run([nx, keys, '--aoc', p, tmp / str(idx)] + ([f'{tid:016x}'] if p.suffix == '.xci' else []), logs / f'aoc_{idx}.log')
     swap_in(tmp, dst)
     kf.write_text(f'{key}\n{len(best)} DLC\n')
     PROG.end(f'{len(best)} DLC')
@@ -1753,7 +1766,7 @@ def main(args=None):
     gb = sum({p.stat().st_size for b, u in picks.values() for p in (b, u) if p}) / 2**30 + 6   # extraction + shader cache + slack
     if free_gb(work) < gb and not all((ex / v).exists() for v in versions): raise BuildError(f'less than {gb:.0f} GB free on the volume of {work}')
     heapck = provisional and HEAP_CHECK and not args.no_heap_check and not heap_checked(g)   # the heap check, when the game needs one (once per provisional profile: it stamps the profile)
-    PROG.plan(1 + len(versions) + bool(fam['dlc']) + 4 - (prepare_xcode or (mac and not mac_pack)))   # prepare Xcode (a Mac-only build: the Mac host) replaces app build + IPA pack with one stage (a Mac app: Mac host + Mac app)
+    PROG.plan(1 + len(versions) + bool(fam['dlc'] or fam['base'].suffix == '.xci') + 4 - (prepare_xcode or (mac and not mac_pack)))   # prepare Xcode (a Mac-only build: the Mac host) replaces app build + IPA pack with one stage (a Mac app: Mac host + Mac app)
     PROG.stage('build nx_extract')
     nx = build_nx_extract(repo, work, logs, env)
     PROG.end()

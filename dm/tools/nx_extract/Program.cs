@@ -3,7 +3,10 @@
 // --manifest: the RomFS is not written, only a list <output dir>/romfs_manifest.tsv (path, size, first 32 bytes), for surveying a new game (a large game's RomFS is well over 10 GB).
 // A damaged NSP (a file whose data fails the NCA's hash check, e.g. a copy cut short or a broken download) stops the extraction with exit code 3 after listing every damaged file;
 //   --allow-damaged writes those files as read instead and only lists them (Super Mario Galaxy's base NSP with 147 MB zeroed: its two prologue WebM movies).
-// Add-on content: nx_extract <prod.keys> --aoc <DLC NSP> <output dir> writes the RomFS of the DLC's data NCA to <output dir> (the packing script puts it at aoc/<index>/, the host mounts it through DM_AOC_DIR).
+// Add-on content: nx_extract <prod.keys> --aoc <DLC NSP> <output dir> [title ID] writes the RomFS of the DLC's data NCA to <output dir> (the packing script puts it at aoc/<index>/, the host mounts it through DM_AOC_DIR).
+// A package may hold several titles (a merged XCI: Animal Crossing's holds the base game, update 2.0.5 and 3 DLC): each part is taken from the NCAs its content meta (cnmt) lists, the base game's
+//   from the Application meta, the update's from the Patch meta, a DLC's from the AddOnContent meta of that title ID. The same XCI may be given as base and update; without a Patch meta it is the base alone.
+// Listing: nx_extract <prod.keys> --list <NSP or XCI> prints one line per content meta: <title ID> <Application|Patch|AddOnContent> v<version>.
 // Title keys come from the common tickets (.tik) inside the NSPs, so only prod.keys is needed; key values are never printed.
 // The base game may also be a cartridge dump (.xci, Monster Hunter Rise): its secure partition holds the NCAs, which carry their keys in the key area (no ticket).
 using System;
@@ -15,10 +18,12 @@ using LibHac.Common.Keys;
 using LibHac.Fs;
 using LibHac.Fs.Fsa;
 using LibHac.FsSystem;
+using LibHac.Ncm;
 using LibHac.Spl;
 using LibHac.Tools.Fs;
 using LibHac.Tools.FsSystem;
 using LibHac.Tools.FsSystem.NcaUtils;
+using LibHac.Tools.Ncm;
 using LibHac.Tools.FsSystem.RomFs;
 using Path = System.IO.Path;
 
@@ -28,10 +33,12 @@ static class P {
     static int Main(string[] a) {
         bool manifest = Array.IndexOf(a, "--manifest") >= 0; a = Array.FindAll(a, s => s != "--manifest");
         g_allow = Array.IndexOf(a, "--allow-damaged") >= 0; a = Array.FindAll(a, s => s != "--allow-damaged");
-        if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir>"); return 2; }
+        if (a.Length == 3 && a[1] == "--list") return List(ExternalKeyReader.ReadKeyFile(a[0]), a[2]);
+        if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir> [title ID]\n       nx_extract <prod.keys> --list <nsp|xci>"); return 2; }
         KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
-        if (a[1] == "--aoc") return Aoc(ks, a[2], a[3]);
-        var basePkg = OpenNsp(ks, a[1]); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2]);
+        if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], a.Length > 4 ? Convert.ToUInt64(a[4], 16) : null);
+        var basePkg = OpenNsp(ks, a[1], ContentMetaType.Application); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2], ContentMetaType.Patch, optional: a[2] == a[1]);
+        if (updPkg != null && updPkg.Count == 0) { Console.WriteLine($"no update in {a[2]}: the base game alone"); updPkg = null; }
         Nca baseProg = Pick(basePkg, NcaContentType.Program) ?? throw new Exception("no Program NCA in the base NSP");
         Nca updProg = updPkg == null ? null : Pick(updPkg, NcaContentType.Program, baseProg.Header.TitleId) ?? throw new Exception("no Program NCA of the base game's program in the update NSP");
         Nca ctrl = Pick(updPkg ?? basePkg, NcaContentType.Control, baseProg.Header.TitleId);
@@ -84,8 +91,8 @@ static class P {
     }
 
     // DLC NSP: one data NCA (content type PublicData / Data) + a meta NCA + the ticket; only the data NCA's RomFS is written
-    static int Aoc(KeySet ks, string nsp, string outDir) {
-        var pkg = OpenNsp(ks, nsp);
+    static int Aoc(KeySet ks, string nsp, string outDir, ulong? id) {
+        var pkg = OpenNsp(ks, nsp, ContentMetaType.AddOnContent, id: id);
         Nca data = Pick(pkg, NcaContentType.PublicData) ?? Pick(pkg, NcaContentType.Data) ?? throw new Exception("no data NCA in the DLC NSP");
         Console.WriteLine($"add-on content {data.Header.TitleId:x16}");
         Directory.CreateDirectory(outDir);
@@ -93,8 +100,31 @@ static class P {
         return 0;
     }
 
-    // Open an NSP (PFS0) or the secure partition of an XCI, import the common tickets, list all NCAs
-    static List<Nca> OpenNsp(KeySet ks, string path) {
+    static int List(KeySet ks, string path) {
+        foreach (Cnmt m in Package(ks, path).metas) Console.WriteLine($"{m.TitleId:x16} {m.Type} v{m.TitleVersion.Version}");
+        return 0;
+    }
+
+    // The NCAs of one part of a package: those the content metas of that type (and title ID) list. A package with no meta of that type: all its NCAs when it has no metas at all,
+    //   else an error, or none when optional (an XCI given as its own update)
+    static List<Nca> OpenNsp(KeySet ks, string path, ContentMetaType type, bool optional = false, ulong? id = null) {
+        var (ncas, metas) = Package(ks, path);
+        if (metas.Count == 0) return new List<Nca>(ncas.Values);
+        var want = metas.FindAll(m => m.Type == type && (id == null || m.TitleId == id));
+        if (want.Count == 0) {
+            if (optional) return new List<Nca>();
+            throw new Exception($"no {type} content meta{(id == null ? "" : $" of title {id:x16}")} in {path}");
+        }
+        var r = new List<Nca>();
+        foreach (Cnmt m in want) foreach (CnmtContentEntry e in m.ContentEntries)
+            if (ncas.TryGetValue(Convert.ToHexString(e.NcaId).ToLowerInvariant(), out Nca n)) r.Add(n);
+        return r;
+    }
+
+    // Open an NSP (PFS0) or the secure partition of an XCI, import the common tickets: its NCAs by content ID (the file name without .nca / .cnmt.nca) and the content metas of its meta NCAs
+    static readonly Dictionary<string, (Dictionary<string, Nca>, List<Cnmt>)> g_pkgs = new Dictionary<string, (Dictionary<string, Nca>, List<Cnmt>)>();
+    static (Dictionary<string, Nca> ncas, List<Cnmt> metas) Package(KeySet ks, string path) {
+        if (g_pkgs.TryGetValue(path, out var have)) return have;
         IFileSystem pfs; var st0 = new LocalStorage(path, FileAccess.Read);
         byte[] magic = new byte[4]; st0.Read(0x100, magic).ThrowIfFailure();
         if (System.Text.Encoding.ASCII.GetString(magic) == "HEAD") {   // XCI: the card header's magic at 0x100
@@ -104,7 +134,7 @@ static class P {
         } else {
             var p = new PartitionFileSystem(); p.Initialize(st0).ThrowIfFailure(); pfs = p;
         }
-        var ncas = new List<Nca>();
+        var ncas = new Dictionary<string, Nca>();
         foreach (DirectoryEntryEx e in pfs.EnumerateEntries("*", SearchOptions.Default)) {
             using var f = new UniqueRef<IFile>();
             pfs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
@@ -113,9 +143,23 @@ static class P {
                 byte[] t = new byte[0x2c0]; st.Read(0, t).ThrowIfFailure();
                 if (t[0x281] != 0) { Console.Error.WriteLine($"[RED] {e.Name} is not a common ticket; supply the title key separately"); continue; }
                 ks.ExternalKeySet.Add(new RightsId(t.AsSpan(0x2a0, 0x10)), new AccessKey(t.AsSpan(0x180, 0x10))).ThrowIfFailure();
-            } else if (e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase)) ncas.Add(new Nca(ks, st));
+            } else if (e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase)) ncas[e.Name.Substring(0, e.Name.IndexOf('.')).ToLowerInvariant()] = new Nca(ks, st);
         }
-        return ncas;
+        var metas = new List<Cnmt>();
+        try {
+            foreach (Nca n in ncas.Values) {   // a meta NCA's section 0 is a PFS0 holding one <type>_<title ID>.cnmt
+                if (n.Header.ContentType != NcaContentType.Meta) continue;
+                IFileSystem fs = n.OpenFileSystem(0, IntegrityCheckLevel.ErrorOnInvalid);
+                foreach (DirectoryEntryEx e in fs.EnumerateEntries("*.cnmt", SearchOptions.Default)) {
+                    using var f = new UniqueRef<IFile>();
+                    fs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                    metas.Add(new Cnmt(f.Get.AsStream()));
+                }
+            }
+        } catch (Exception x) {   // an unreadable meta: every NCA of the package, as before metas were read
+            Console.Error.WriteLine($"[RED] cannot read the content metas of {path} ({x.Message}): taking all its NCAs"); metas.Clear();
+        }
+        return g_pkgs[path] = (ncas, metas);
     }
     // A multi-program application has a Program and a Control NCA per program index (ROMANCE OF THE THREE KINGDOMS 8 REMAKE: its update 1.1.3 adds a whole second program,
     // title ID …0001, beside the game's patch, …0000): with no title ID the lowest one (program index 0, the game), else the NCA of that title ID

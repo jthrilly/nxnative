@@ -160,7 +160,7 @@ brew install --cask dotnet-sdk
 python3 -m pip install lz4 capstone fonttools "backports.zstd; python_version < '3.14'"
 ```
 
-**2. Put one game's NSPs in a folder**: the base game (an NSP, or an XCI cartridge dump), plus its update and DLC if you have them:
+**2. Put one game's NSPs in a folder**: the base game (an NSP, or an XCI cartridge dump), plus its update and DLC if you have them. An XCI that bundles the update and DLC (its name tagged `[v<N>]` with the update's version) works on its own:
 
 ```
 ~/Games/MarioWonder/
