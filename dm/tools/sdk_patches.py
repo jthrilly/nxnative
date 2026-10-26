@@ -31,6 +31,17 @@ CUTS = {
     (0x37c3b0, '08fca752', '087ca052', 'AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000'),
     (0x37c44c, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
   ],
+  # Pokémon Violet 4.0.0 (v786432) sdk (SDK 13.3.13): the node area cut, and regions of 1 GB and more aligned to 32 MB, as Absolum's. nninitStartup calls
+  # StandardAllocator::Initialize(nullptr, 0x300000000, false) with virtual address memory (main+0x167d554; the cut of that address space to 4 GB is in the profile's patches.py), which aborted
+  # at sdk+0x3251a0: with the node area cut alone its first AllocateAddressRegion (4 GB) still failed with 0x1803, since the placement helper (sdk+0x37c8f0) aligns a region by its size as
+  # SDK 18 does (4 MB from 4 MB up, 32 MB from 32 MB up, else 1 GB at +0x37c95c), and a 1 GB-aligned 4 GB region does not fit the 4.375 GB alias region after the node area. The constructor
+  # is at sdk+0x37c750 (limit = alias start + 0x3fe00000 at +0x37c760, a unit heap of 0x30-byte nodes, the area then registered as occupied at +0x37c7fc): Patrick's Parabox's SDK 13.3.7
+  # constructor at other offsets
+  'bb560bdfa85b4a97786ae2c3b7995df6': [
+    (0x37c760, '08fca752', '087ca052', 'AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000'),
+    (0x37c7fc, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
+    (0x37c95c, '0a00a852', '0a40a052', 'AllocateAddressRegion: alignment of regions of 1 GB and more mov w10,#0x40000000 → mov w10,#0x2000000 (32 MB, as from 32 MB up)'),
+  ],
   # AI: THE SOMNIUM FILES - nirvanA Initiative 1.0.2 (v131072) sdk (SDK 13.3.5, Unity 2020.3.30f1): the same node area cut. nninitStartup (main+0x493300) calls
   # StandardAllocator::Initialize(nullptr, pool − used) with virtual address memory, as Patrick's Parabox. The constructor is at sdk+0x37c130 (limit = alias start + 0x3fe00000 at +0x28,
   # a unit heap of 0x30-byte nodes, the area then registered as occupied at +0x37c1dc)
