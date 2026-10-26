@@ -1510,7 +1510,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); snap_dra
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[113];
+static int g_red_once[117];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("[RED] " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -1690,7 +1690,7 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "texture format %#x has no Metal equivalent (first case)", t->d.format); return nil; }
     // Metal's limits: 16384 in 2D, 2048 in 3D, 2048 array layers; beyond them Metal aborts the process on an assertion, so they are caught here with a red line
-    if (t->d.width > 16384 || t->d.height > 16384 || t->d.depth > 2048 || t->d.levels > 15) { RED_ONCE(71, "texture size exceeds Metal limits: %u×%u×%u levels %u format %#x target %d (first case ser=%llu)", t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.format, t->d.target, (unsigned long long)t->serial); return nil; }
+    if (t->d.width > 16384 || t->d.height > 16384 || t->d.depth > 2048) { RED_ONCE(71, "texture size exceeds Metal limits: %u×%u×%u levels %u format %#x target %d (first case ser=%llu)", t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.format, t->d.target, (unsigned long long)t->serial); return nil; }
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
     d.pixelFormat = (MTLPixelFormat)pf;
     d.width = t->d.width ? t->d.width : 1; d.height = t->d.height ? t->d.height : 1; d.depth = 1; d.arrayLength = 1;
@@ -1712,6 +1712,27 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 9: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.depth; break;
         case 10: RED_ONCE(1, "buffer textures (TARGET_BUFFER) not implemented"); return nil;
         default: d.textureType = MTLTextureType2D; break;
+    }
+    // Fields NVN takes that Metal refuses: Metal aborts the process on them (-[MTLTextureDescriptorInternal validateWithDevice:]). An array or 3D texture of no layers gets one; one of
+    // more than 2048 is not made. More levels than the size holds (on NVN the extra ones are 1x1; a mod's 1x1 texture declaring 9, MacNativeGames f864eb0): made with the levels the
+    // size holds, and copies to the others are skipped (tex_level_ok). A multisample texture of a sample count the GPU lacks (Apple GPUs have 2 and 4; NVN also 8 and 16), or of
+    // one sample, has no Metal form and is not made, as a texture past Metal's size limits (fewer samples would leave shaders that read sample 4 or higher reading past the texture)
+    if (d.depth < 1) d.depth = 1;
+    if (d.arrayLength < 1) d.arrayLength = 1;
+    if (d.arrayLength > 2048) { RED_ONCE(113, "texture of %lu layers exceeds Metal's 2048: not made (format %#x target %d, first case ser=%llu)", (unsigned long)d.arrayLength, t->d.format, t->d.target, (unsigned long long)t->serial); return nil; }
+    NSUInteger big = MAX(d.width, d.height), fit = 1;
+    if (d.textureType == MTLTextureType3D) big = MAX(big, d.depth);
+    while (big >> fit) fit++;
+    if (d.mipmapLevelCount > fit) {
+        RED_ONCE(114, "texture %u×%u×%u declares %lu levels, its size holds %lu: made with %lu, the others are not kept (format %#x, first case ser=%llu)", t->d.width, t->d.height, t->d.depth,
+                 (unsigned long)d.mipmapLevelCount, (unsigned long)fit, (unsigned long)fit, t->d.format, (unsigned long long)t->serial);
+        d.mipmapLevelCount = fit;
+    }
+    if (d.textureType == MTLTextureType2DMultisample || d.textureType == MTLTextureType2DMultisampleArray) {
+        if (d.sampleCount < 2 || ![g_dev supportsTextureSampleCount:d.sampleCount]) {
+            RED_ONCE(115, "multisample texture of %lu samples: this GPU has no such texture, not made (format %#x, first case ser=%llu)", (unsigned long)d.sampleCount, t->d.format, (unsigned long long)t->serial);
+            return nil;
+        }
     }
     d.storageMode = MTLStorageModePrivate;   // Render targets and assets both go in GPU private storage (lossless compression available)
     d.usage = MTLTextureUsageShaderRead | (fmt_compressed(t->d.format) || packaged ? 0 : MTLTextureUsageRenderTarget)
@@ -1853,7 +1874,8 @@ static void up_flush(void) {
     if (g_up_block && g_up_block != g_up_slot_blk[slot]) [staging addObject:g_up_block];
     g_up_keep = nil; g_up_block = nil;
     g_up_block_off = g_up_block_size = g_up_staging_bytes = 0;
-    NSMutableArray *dsts = [NSMutableArray arrayWithCapacity:(NSUInteger)g_nup_blits]; for (int i = 0; i < g_nup_blits; i++) if (g_up_blits[i].dst) [dsts addObject:g_up_blits[i].dst];
+    NSMutableSet *targets = [NSMutableSet setWithArray:g_up_texs]; for (int i = 0; i < g_nup_blits; i++) if (g_up_blits[i].dst) [targets addObject:g_up_blits[i].dst];
+    NSArray *dsts = targets.allObjects;
     static int lost_at = -2; static uint64_t batch_n; if (lost_at == -2) { const char *e = getenv("DM_TEST_UP_LOST"); lost_at = e ? atoi(e) : -1; } int fake_lost = dsts.count && lost_at > 0 && (int)++batch_n == lost_at;
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     atomic_fetch_add(&g_up_pending, 1);
@@ -2098,7 +2120,9 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
 }
 // Zero newly created non-packaged textures: a new Metal texture's content is undefined, while a freshly mapped memory pool on the Switch reads as 0. Games depend on it: SMBW's fountain water surface uses a 512×1 RGBA16F wave texture
 // that every frame is "read last frame → render into a render target → copy back" and is never cleared; the undefined initial value keeps swinging through the feedback and pushes the water vertices to the top of the screen (the tall panels above the fountain).
-// Copied level by level / slice by slice from one shared all-zero buffer, executed with the upload batch (ordered before this replay). Multisample, depth / stencil and block-compressed formats are not cleared (games always clear them before use, and they cannot be copied into anyway).
+// Copied level by level / slice by slice from one shared all-zero buffer, executed with the upload batch (ordered before this replay). Depth / stencil use clear load actions instead:
+// Pokemon Brilliant Diamond's movie quad tests GEQUAL against a newly allocated window depth buffer without clearing it. Metal's undefined initial depth hid every movie even after VP8 decoding.
+// Multisample colour and block-compressed formats are not filled by this path.
 static size_t mtl_pf_bytes(MTLPixelFormat pf) {
     switch ((int)pf) {
         case 10: case 11: case 12: case 13: case 14: return 1;                                   // R8
@@ -2130,9 +2154,31 @@ static void tex_zero_fill(id<MTLTexture> mt) {
     static int warned;
     if (!atomic_load(&g_sub_thread_set) || !on_sub_thread()) return;   // the upload batch belongs to the submit thread only
     MTLTextureType tt = mt.textureType;
+    MTLPixelFormat pf = mt.pixelFormat;
+    int depth = pf == MTLPixelFormatDepth16Unorm || pf == MTLPixelFormatDepth32Float || pf == MTLPixelFormatDepth32Float_Stencil8;
+    int stencil = pf == MTLPixelFormatStencil8 || pf == MTLPixelFormatDepth32Float_Stencil8;
+    if (depth || stencil) {
+        up_begin();
+        if (g_up_ce) { m4_end(g_up_ce); g_up_ce = nil; }
+        NSUInteger slices = mt.arrayLength * (tt == MTLTextureTypeCube || tt == MTLTextureTypeCubeArray ? 6 : 1);
+        for (NSUInteger l = 0; l < mt.mipmapLevelCount; l++) for (NSUInteger y = 0; y < slices; y++) {
+            MTL4RenderPassDescriptor *pd = [MTL4RenderPassDescriptor new];
+            if (depth) { pd.depthAttachment.texture = mt; pd.depthAttachment.level = l; pd.depthAttachment.slice = y;
+                pd.depthAttachment.loadAction = MTLLoadActionClear; pd.depthAttachment.storeAction = MTLStoreActionStore; pd.depthAttachment.clearDepth = 0; }
+            if (stencil) { pd.stencilAttachment.texture = mt; pd.stencilAttachment.level = l; pd.stencilAttachment.slice = y;
+                pd.stencilAttachment.loadAction = MTLLoadActionClear; pd.stencilAttachment.storeAction = MTLStoreActionStore; pd.stencilAttachment.clearStencil = 0; }
+            id<MTL4RenderCommandEncoder> e = [g_up_cb renderCommandEncoderWithDescriptor:pd];
+            [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice]; m4_end(e);
+        }
+        g_up_ce = [g_up_cb computeCommandEncoder];
+        [g_up_ce barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+        [g_up_ce setArgumentTable:g_up_ct]; [g_up_texs addObject:mt];
+        if (!g_cb) up_flush();
+        return;
+    }
     if (tt == MTLTextureType2DMultisample || tt == MTLTextureType2DMultisampleArray || tt == MTLTextureTypeTextureBuffer) return;
     size_t bpp = mtl_pf_bytes(mt.pixelFormat);
-    if (!bpp) { if (!warned++) MLOG("new-texture zeroing: pixel format %lu not cleared (depth / stencil / compressed etc.)", (unsigned long)mt.pixelFormat); return; }
+    if (!bpp) { if (!warned++) MLOG("new-texture zeroing: pixel format %lu not cleared (compressed / unsupported)", (unsigned long)mt.pixelFormat); return; }
     NSUInteger slices = mt.arrayLength * (tt == MTLTextureTypeCube || tt == MTLTextureTypeCubeArray ? 6 : 1);
     size_t need = (size_t)mt.width * bpp * mt.height * mt.depth;   // level 0, one slice is the largest
     if (need > (64u << 20)) { static int big; if (!big++) MLOG("new-texture zeroing: %lux%lux%lu exceeds 64 MB, not cleared", (unsigned long)mt.width, (unsigned long)mt.height, (unsigned long)mt.depth); return; }
@@ -2154,7 +2200,9 @@ static void tex_zero_fill(id<MTLTexture> mt) {
 // (the zero fill does the same), COMPRESSIBLE textures (their memory is meaningless without the compression tags), multisample, depth / stencil and sparse ones.
 // In a pool the CPU can write, the same holds for storage the game flushed (nvnMemoryPoolFlushMappedRange) before the texture's first use, when the GPU has not written it yet
 // (nvn_flushed in hle_nvn.c: Breath of the Wild's sky scattering tables, copied into their pools and flushed; without them the sky was brownish grey). DM_NVN_FLUSH_FILL=0 leaves
-// those out, as before
+// those out, as before. In a CPU_UNCACHED pool the CPU's writes reach memory with no flush, and the GPU reads that memory: what the storage holds at the texture's first use is its
+// content there too, flushed or not. Donkey Kong Country: Tropical Freeze's title logo and menu panels (ASTC 5x5, no packaged layout) sit in CPU_UNCACHED | GPU_CACHED pools
+// (flags 0x22) whose storage holds their texels at first use (the 912x512 logo: 242,374 of 376,832 bytes non-zero), never flushed; as GPU textures of zeros they were magenta
 int nvn_flushed(const void *p, uint64_t n);   // hle_nvn.c
 static int mem_any(const uint8_t *p, uint64_t n) {   // whether any byte is non-zero (stops at the first)
     uint64_t i = 0, v;
@@ -2165,13 +2213,14 @@ static int mem_any(const uint8_t *p, uint64_t n) {   // whether any byte is non-
 static int tex_init_fill(const tex_t *t, id<MTLTexture> mt) {
     if (!t->mem || !t->pool || (t->pool->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL) || t->has_layout) return 0;
     if (t->d.samples > 1 || (t->d.flags & NVN_TEXTURE_FLAGS_COMPRESSIBLE) || ((int)mt.pixelFormat >= 250 && (int)mt.pixelFormat <= 262)) return 0;   // 250..262: Depth16Unorm … X24_Stencil8 (some names are macOS-only)
-    int no_cpu = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) != 0;
+    int no_cpu = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) != 0, uncached = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED) != 0;
     static int flush_fill = -1; if (flush_fill < 0) { const char *e = getenv("DM_NVN_FLUSH_FILL"); flush_fill = !e || atoi(e) != 0; }
-    if (!no_cpu && (!flush_fill || !nvn_flushed(t->mem, t->L.size))) return 0;
+    if (!no_cpu && !uncached && (!flush_fill || !nvn_flushed(t->mem, t->L.size))) return 0;
     if (!atomic_load(&g_sub_thread_set) || !on_sub_thread() || !mem_any(t->mem, t->L.size)) return 0;   // the upload batch belongs to the submit thread
     if (pkg_upload(t, NULL, mt) != mt) return 0;
-    static uint64_t n[2]; if (n[no_cpu]++ < 4) MLOG("initial content: ser=%llu %ux%ux%u format %#x filled from its storage, %s (%llu so far)", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format,
-                                                    no_cpu ? "a CPU_NO_ACCESS pool's" : "flushed by the CPU before its first use", (unsigned long long)n[no_cpu]);
+    int why = no_cpu ? 0 : uncached ? 1 : 2;
+    static uint64_t n[3]; if (n[why]++ < 4) MLOG("initial content: ser=%llu %ux%ux%u format %#x filled from its storage, %s (%llu so far)", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format,
+                                                 (const char *[]){"a CPU_NO_ACCESS pool's", "a CPU_UNCACHED pool's", "flushed by the CPU before its first use"}[why], (unsigned long long)n[why]);
     return 1;
 }
 
@@ -4827,6 +4876,62 @@ static void pso_bundle_open(NSMutableArray<id<MTL4Archive>> *archp) {
     g_arch_bundle = a; g_bundle_dir = dir; [archp addObject:a];
     MLOG("pipeline archive bundled with the app: %s, %.1f MB, opened in %.1f ms", p.UTF8String, [[NSFileManager.defaultManager attributesOfItemAtPath:p error:nil] fileSize] / 1048576.0, (bp_now() - t0) / 1e6);
 }
+// Metal's archive builder works in a folder of the user cache folder (com.apple.gpuarchiver/gpuarchiver-*: the captured functions, descriptors and reflection, about 0.4-5 MB).
+// The first capture after a flush makes one, and no flush, release or exit removes it, so every flush left one (456 folders, 2.5 GB on one Mac). Nothing reads it once its flush
+// has written the file: a probe that removed each after its flush took every pipeline from the files again (found by MacNativeGames, 1eff989, for MTLBinaryArchive). On the Mac the
+// folder is shared by all of the user's programs and the process keeps nothing open in it, so the first capture after a flush (g_ga_mu) lists the folder before and after its
+// compile and takes the one folder that appeared as its own; the flush removes it (and exit, when no flush came). When more than one appeared (another program's capture in the
+// same few ms) none is touched. On iOS the folder is the app's own: the start removes what earlier runs left
+static pthread_mutex_t g_ga_mu = PTHREAD_MUTEX_INITIALIZER; static _Atomic int g_ga_seen, g_ga_recap; static NSString *g_ga_mine; static _Atomic int g_ga_said;
+static NSString *ga_dir(void) {
+    static NSString *dir; static dispatch_once_t once;
+    dispatch_once(&once, ^{ char b[PATH_MAX]; if (confstr(_CS_DARWIN_USER_CACHE_DIR, b, sizeof b)) dir = [@(b) stringByAppendingPathComponent:@"com.apple.gpuarchiver"]; });
+    return dir;
+}
+static NSSet<NSString *> *ga_list(void) {
+    NSArray<NSString *> *a = ga_dir() ? [NSFileManager.defaultManager contentsOfDirectoryAtPath:ga_dir() error:nil] : nil;
+    return [NSSet setWithArray:[a filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self BEGINSWITH 'gpuarchiver-'"]] ?: @[]];
+}
+// A compile the serializer captures, with g_arch_rw held shared: the first one after a flush notes the folder it made
+static id<MTLRenderPipelineState> ga_capture(MTL4RenderPipelineDescriptor *d, MTL4CompilerTaskOptions *o, NSError **e) {
+    // A recapture through lookup archives makes no folder at its compile (the flush makes it, ga_flushed): it takes none, or it could take another program's made meanwhile
+    if (o.lookupArchives.count) { atomic_store(&g_ga_recap, 1); return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e]; }
+    // other compiles do not wait for the one that looks: theirs land in the same folder (at worst one made before its first listing, so none is taken and the folder stays)
+    if (!g_ser4 || atomic_load(&g_ga_seen) || pthread_mutex_trylock(&g_ga_mu)) return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e];
+    if (atomic_load(&g_ga_seen)) { pthread_mutex_unlock(&g_ga_mu); return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e]; }
+    NSSet<NSString *> *before = ga_list();
+    id<MTLRenderPipelineState> ps = [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e];
+    if (ps) {   // a failed compile may have captured nothing: the next capture looks again
+        NSMutableSet<NSString *> *made = [ga_list() mutableCopy]; [made minusSet:before];
+        if (made.count == 1) g_ga_mine = made.anyObject;
+        else if (made.count > 1 && atomic_fetch_add(&g_ga_said, 1) < 4) MLOG("pipeline archive: %lu new Metal build folders during the first capture since the last flush: none is removed", (unsigned long)made.count);
+        atomic_store(&g_ga_seen, 1);
+    }
+    pthread_mutex_unlock(&g_ga_mu);
+    return ps;
+}
+static void ga_remove(NSString *name) {
+    NSError *e = nil;
+    if (name && ![NSFileManager.defaultManager removeItemAtPath:[ga_dir() stringByAppendingPathComponent:name] error:&e] && atomic_fetch_add(&g_ga_said, 1) < 4)
+        MLOG("[RED] pipeline archive: Metal's build folder %s not removed (%s)", name.UTF8String, e.localizedDescription.UTF8String);
+}
+// After a flush wrote its file, with g_arch_rw held alone: its build folder goes. Bases recaptured through lookup archives (compaction) get theirs during the flush, not at
+// their compile: after such captures the one folder that appeared while it wrote (before: listed just before it) goes as well. Other flushes make none, so a folder appearing
+// then is another program's
+static void ga_flushed(NSSet<NSString *> *before) {
+    ga_remove(g_ga_mine);
+    if (atomic_exchange(&g_ga_recap, 0)) {
+        NSMutableSet<NSString *> *made = [ga_list() mutableCopy]; [made minusSet:before];
+        if (made.count == 1) ga_remove(made.anyObject);
+    }
+    g_ga_mine = nil; atomic_store(&g_ga_seen, 0);
+}
+// At exit: the folder of captures no flush wrote, unless a compile is still under way
+static void ga_exit(void) {
+    if (pthread_rwlock_trywrlock(&g_arch_rw)) return;
+    ga_remove(g_ga_mine); g_ga_mine = nil;
+    pthread_rwlock_unlock(&g_arch_rw);
+}
 static void pso4_init(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -4840,6 +4945,14 @@ static void pso4_init(void) {
             g_arch_q = dispatch_queue_create("dm.nvn.pso-archive", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
             MTL4PipelineDataSetSerializerDescriptor *sd = [MTL4PipelineDataSetSerializerDescriptor new]; sd.configuration = MTL4PipelineDataSetSerializerConfigurationCaptureBinaries;
             ser = [g_dev newPipelineDataSetSerializerWithDescriptor:sd];
+            atexit(ga_exit);
+#if TARGET_OS_IPHONE
+            NSSet<NSString *> *old = ga_list();   // listed before any capture, so this run's own folder is never among them
+            if (old.count) dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                int n = 0; for (NSString *name in old) n += [NSFileManager.defaultManager removeItemAtPath:[ga_dir() stringByAppendingPathComponent:name] error:nil];
+                MLOG("pipeline archive: %d of Metal's build folders left by earlier runs removed", n);
+            });
+#endif
             uint64_t t0 = bp_now(); unsigned long long bytes = 0;
             NSMutableArray<NSString *> *runf = [NSMutableArray array];
             NSArray<NSString *> *names = [[[NSFileManager.defaultManager contentsOfDirectoryAtPath:g_arch_dir error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mtl4a'"]]
@@ -4876,7 +4989,10 @@ static void arch_flush(void) {
     uint64_t t0 = bp_now(); NSError *e = nil;
     int vd = atomic_exchange(&g_arch_new_vd, 0);   // exact: no compile is between capture and count while the write side is held
     NSString *path = [g_arch_dir stringByAppendingPathComponent:[NSString stringWithFormat:vd ? @"%05d.mtl4a" : @"p%05d.mtl4a", g_arch_seq++]], *tmp = [path stringByAppendingString:@".tmp"];
-    BOOL ok = [g_ser4 serializeAsArchiveAndFlushToURL:[NSURL fileURLWithPath:tmp] error:&e]; pthread_rwlock_unlock(&g_arch_rw);
+    NSSet<NSString *> *ga_before = atomic_load(&g_ga_recap) ? ga_list() : nil;
+    BOOL ok = [g_ser4 serializeAsArchiveAndFlushToURL:[NSURL fileURLWithPath:tmp] error:&e];
+    if (ok) ga_flushed(ga_before);
+    pthread_rwlock_unlock(&g_arch_rw);
     ok = ok && !rename(tmp.fileSystemRepresentation, path.fileSystemRepresentation);
     if (!ok) { MLOG("[RED] pipeline archive: writing %s failed%s%s", path.UTF8String, e ? ": " : "", e ? e.localizedDescription.UTF8String : ""); unlink(tmp.fileSystemRepresentation); return; }
     g_arch_flush_ok = 1;
@@ -4970,13 +5086,13 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, N
         int recap = base && from_run && g_compact_opts && atomic_load(&g_warm_running), lk = recap || (!base && compile);
         if (lk) pthread_rwlock_rdlock(&g_arch_rw);
         if (recap) {   // compaction (see g_compact_opts): taken again through the compiler, which captures it
-            id<MTLRenderPipelineState> cb = [g_comp4 newRenderPipelineStateWithDescriptor:b compilerTaskOptions:g_compact_opts error:nil];
+            id<MTLRenderPipelineState> cb = ga_capture(b, g_compact_opts, nil);
             if (cb) { base = cb; atomic_fetch_add(&g_arch_new, 1); g_compacted++; if (vd) g_arch_new_vd++; }
         }
         if (!base) {
             if (g_arch4.count + g_arch4p.count) { g_pt_miss_n++; g_pt_miss_ns += t1 - t0; }
             if (compile) {
-                NSError *be = nil; base = [g_comp4 newRenderPipelineStateWithDescriptor:b compilerTaskOptions:nil error:&be]; job->error = be; job->compiled = 1;
+                NSError *be = nil; base = ga_capture(b, nil, &be); job->error = be; job->compiled = 1;
                 g_pt_comp_ns += bp_now() - t1;
                 if (base) { g_pb_built++; if (vd) g_arch_new_vd++; if (g_ser4) arch_note_new(); }
             }
@@ -5204,7 +5320,7 @@ static void pre_pair(NSString *vk, NSString *fk, int zero) {
         for (id<MTL4Archive> a in g_arch4p) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
         for (id<MTL4Archive> a in g_arch4) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
         NSError *e = nil;
-        pthread_rwlock_rdlock(&g_arch_rw); id ps = [g_comp4 newRenderPipelineStateWithDescriptor:m compilerTaskOptions:nil error:&e]; pthread_rwlock_unlock(&g_arch_rw);
+        pthread_rwlock_rdlock(&g_arch_rw); id ps = ga_capture(m, nil, &e); pthread_rwlock_unlock(&g_arch_rw);
         if (ps) { g_pre_built++; atomic_fetch_add(&g_arch_new, 1); }
         else { if (g_pre_failed++ < 4) MLOG("[RED] pipeline prebuild: the base of %s + %s failed: %s", vk.UTF8String, fk.UTF8String, e.localizedDescription.UTF8String); }
     }
@@ -8277,6 +8393,9 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     __unsafe_unretained NvProg *pr = g_geo_program ? g_geo_program : prog_get(S.prog);
     draw_gs_check(pr);   // a geometry stage left with no function (see prog_fold_gs)
     if (S.rast_discard) { tf_draw(pr, dw, di); return; }   // the vertex stage only: transform feedback capture, or nothing (tf_draw)
+    // Transform feedback records every draw between Begin and End, rasterized or not: Donkey Kong Country: Tropical Freeze captures its fur's lagged positions with rasterization on
+    // (a vertex-only program, colour mask 0, `7dcdaed991c74bfe`), and its fur shells read them; the capture runs first, then the draw rasterizes as on the GPU
+    if (S.tf_on && pr && pr->sh[0] && pr->sh[0]->tf_fn) tf_draw(pr, dw, di);
     if (g_nubd && (g_enc || ubd_lazy()) && ubd_conflict(pr, dw, di)) { g_ubd_conflicts++; rp_end(); ubd_land(); }   // land the deferred inline updates before this draw (see ubd_conflict)
     if (zskip_can_draw(pr)) {   // Zero-source skip: the output is always 0, writing 0 over 0, so this draw changes no result (see zskip_can_draw)
         g_zskip_count++; { static int once; if (!once++) MLOG("zero-source skip: first case pass %llu", g_stat_pass + 1); }
@@ -8653,6 +8772,12 @@ static void dispatch(const p_dispatch *dp) {
     if (own) enc_c_end(ce);
 }
 // GPU: texture -> buffer (row stride taken from SetCopyRowStride, layer stride from SetCopyImageStride, 0 = tightly packed)
+// A copy at a level the host texture lacks (more levels declared than its size holds, tex_desc) is skipped: Metal does not check the level of a blit
+static int tex_level_ok(id<MTLTexture> t, NSUInteger level, const char *what) {
+    if (level < t.mipmapLevelCount) return 1;
+    RED_ONCE(116, "%s at level %lu of a texture with %lu levels: skipped (first case)", what, (unsigned long)level, (unsigned long)t.mipmapLevelCount);
+    return 0;
+}
 static void copy_t2b(const p_copy_b2t *c) {
     rp_flush();   // Materialize pending clears before reading, matching copy_t2t.
     g_wr_epoch++; g_mdx_epoch++;
@@ -8661,6 +8786,7 @@ static void copy_t2b(const p_copy_b2t *c) {
     if (!t) return;
     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
+    if (!tex_level_ok(t, level, "texture-to-buffer copy")) return;
     size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
     size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
@@ -8703,7 +8829,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
     // Finding: docs/reference/memory.md, GPU readback without an autorelease pool.
     @autoreleasepool {
     id<MTLTexture> mt = tex_mtl(t);
-    if (!mt) { memset(dst, 0, img * nz); return; }
+    if (!mt || !tex_level_ok(mt, level, "CPU readback")) { memset(dst, 0, img * nz); return; }
     mtl_finish_gpu_at(WS_READTEX);
     id<MTLBuffer> buf = [g_dev newBufferWithLength:wb * hb * nz options:MTLResourceStorageModeShared];
     id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
@@ -8791,6 +8917,7 @@ static void copy_b2t(const p_copy_b2t *c) {
     if (!t) { PD("C ser=%llu (no host texture)", c->tex->serial); return; }
     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
+    if (!tex_level_ok(t, level, "buffer-to-texture copy")) return;
     size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
     size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
@@ -8923,6 +9050,7 @@ static void copy_t2t(const p_copy_t2t *c) {
     if (!s || !d) return;
     unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
     unsigned sz0 = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, dz0 = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
+    if (!tex_level_ok(s, sl, "texture copy source") || !tex_level_ok(d, dl, "texture copy destination")) return;
     if (c->flags & DM_COPY_RESOLVE) {   // Downsample: multisample resolve into the single-sample destination (depth takes sample 0); with equal sample counts it is a plain whole copy
         if (s.sampleCount == d.sampleCount && s.pixelFormat == d.pixelFormat && s.width == d.width && s.height == d.height) {
             enc_b_copy_texture(blit(), s, sz0, sl, MTLOriginMake(0, 0, 0), MTLSizeMake(s.width, s.height, 1), d, dz0, dl, MTLOriginMake(0, 0, 0));

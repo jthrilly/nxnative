@@ -69,11 +69,16 @@ static void samples_xy(int s, uint32_t *sx, uint32_t *sy) {
 // storage is whole tiles, 64 KB aligned. Monster Hunter Rise's streamed textures come pre-swizzled that way in its files and are placed at the level offsets the host reports: laid out unpadded,
 // its 1024×1024 ASTC 6×6 textures (48 GOBs wide instead of 43, level 1 at 0x90000 instead of 0x81000) read 2,183 all-zero blocks in level 0 and 3,043 in level 1, which ASTC
 // decodes as its error colour (magenta clothes)
-// With the automatic block height, a sparse texture of 8- or 16-byte blocks has blocks at most 8 GOBs high, so its tile is 16 GOBs (1,024 bytes) wide; 4-byte texels keep 16-GOB
-// blocks and 8-GOB tiles. Yoshi's Crafted World ships its streamed textures pre-swizzled so: a 384×384 DXT5 level is 32 GOBs × two 8-GOB block rows (0x40000 bytes, 16-GOB blocks
+// Yoshi's Crafted World ships its streamed textures pre-swizzled in the 64 KB tile shapes below (sparse_tile_h): a 384×384 DXT5 level is 32 GOBs × two 8-GOB block rows (0x40000 bytes, 16-GOB blocks
 // gave 0x30000), a 1350×270 BGRA8 one 88 GOBs × three 16-GOB block rows. UE sizes its upload buffer from the host's layout, and the larger level data overran it into the heap
 enum { SPARSE_TILE = 0x10000 };
 static int sparse_of(const nvn_texdesc *d) { return (d->flags & 0x20) && !(d->flags & 0x50) && d->target != 10; }
+// A sparse 2D texture without a packaged layout takes the block height of its 64 KB tile instead of the automatic one: the tile's shape in blocks is the standard one,
+// 256×256 / 256×128 / 128×128 / 128×64 / 64×64 blocks for 1 / 2 / 4 / 8 / 16 bytes per block, so its rows make a block height of 32 / 16 / 16 / 8 / 8 GOBs
+// (log2 5 / 4 / 4 / 3 / 3); -1 for other block sizes. OCTOPATH TRAVELER's world map (4096×2048 BC1, 512 block rows) is laid out in 8 GOBs where the automatic rule gives 16:
+// read with 16, its 64 KB tiles came out shuffled into a patchwork; its 512×512 RGBA8 sprite sheets read right with 16, and Monster Hunter Rise's packaged ASTC 6×6 (16 bytes
+// per block) carry 8. Checked for 4, 8 and 16 bytes per block; the 1- and 2-byte heights follow the same tile shapes
+static int sparse_tile_h(unsigned bpb) { return bpb == 1 ? 5 : bpb == 2 || bpb == 4 ? 4 : bpb == 8 || bpb == 16 ? 3 : -1; }
 // Offset of level `level` from the start of its layer, and the GOB columns it is laid out with (*gobs, may be NULL)
 static uint64_t level_walk(const nvn_texdesc *d, unsigned level, unsigned dpl, uint32_t w, uint32_t h, uint32_t z,
                            unsigned tileH, unsigned tileD, fmt_t t, uint32_t *gobs) {
@@ -124,10 +129,8 @@ void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
         unsigned pl = (unsigned)(d->pkg_block_h - 1) & 0xff;
         if (dpl >= 2) tileH = pl & 0xf;
         if (dpl == 3) tileD = pl >> 4;
-    } else if (dpl == 2) {
-        uint32_t ah = blk(h * sy, t.bh); tileH = pick_tile(ah * 3 / 16);
-        if (sparse_of(d) && t.bpb >= 8 && tileH > 3) tileH = 3;
-    }
+    } else if (dpl == 2 && sparse_of(d) && sparse_tile_h(t.bpb) >= 0) tileH = (unsigned)sparse_tile_h(t.bpb);
+    else if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = pick_tile(ah * 3 / 16); }
     else if (dpl == 3) tileD = pick_tile(z + z / 2);
     o->tileH = tileH; o->tileD = tileD;
     unsigned levels = d->levels ? d->levels : 1;
@@ -162,6 +165,24 @@ uint32_t nvn_tex_level_gobs(const nvn_texdesc *d, unsigned level) {
     nvn_texlayout L; nvn_tex_layout(d, &L);
     level_walk(d, level, dpl, w, h, z, L.tileH, L.tileD, t, &g);
     return g;
+}
+
+int nvn_tex_sparse_tiles(const nvn_texdesc *d, uint32_t *tw, uint32_t *th, uint32_t *td) {
+    fmt_t t = fmt_of(d->format);
+    unsigned dpl; int layered; uint32_t w, h, z;
+    shape(d, &dpl, &layered, &w, &h, &z);
+    *tw = *th = *td = 0;
+    if (!sparse_of(d) || !t.bpb) return 0;
+    uint32_t sx, sy; samples_xy(d->samples, &sx, &sy);
+    nvn_texlayout L; nvn_tex_layout(d, &L);
+    uint32_t gw = 128u >> (L.tileH + L.tileD); if (!gw) gw = 1;   // GOB columns of a tile, as level_walk
+    *tw = gw * 64 / t.bpb * t.bw / sx; *th = dpl >= 2 ? (8u << L.tileH) * t.bh / sy : 1; *td = dpl >= 3 ? 1u << L.tileD : 1;
+    unsigned levels = d->levels ? d->levels : 1, n = 0;
+    for (; n < levels; n++) {   // the same test as level_walk's: a level at least one tile wide, high and deep
+        uint32_t lwb = blk(mip(w * sx, n), t.bw) * t.bpb, lh = dpl >= 2 ? blk(mip(h * sy, n), t.bh) : 1, ld = dpl >= 3 ? mip(z, n) : 1;
+        if (lwb < gw * 64 || lh < 8u << L.tileH || ld < 1u << L.tileD) break;
+    }
+    return (int)n;
 }
 
 void nvn_tex_level_tiles(const nvn_texdesc *d, unsigned level, unsigned *tileH, unsigned *tileD) {
