@@ -53,7 +53,7 @@ class ReadImage(unittest.TestCase):
             with romfs.mmap.mmap(f.fileno(), 0, access=romfs.mmap.ACCESS_READ) as m:
                 self.assertEqual(len(m), len(self.data)); self.assertEqual(m[:], self.data)
                 self.assertEqual(struct.unpack_from('<I', m)[0], 0x07230203)
-                self.assertEqual(re.search(b'ABC', m).start(), 4)
+                found = re.search(b'ABC', m); assert found is not None; self.assertEqual(found.start(), 4)
                 self.assertEqual(hashlib.sha256(m).digest(), hashlib.sha256(self.data).digest())
                 self.assertEqual(m.find(b'ABC'), 4); self.assertEqual(m.rfind(b'ABC'), len(self.data) - 4)
                 self.assertEqual(m.find(b'archive member'), -1)
