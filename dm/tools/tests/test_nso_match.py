@@ -5,9 +5,11 @@ A patch of several functions applies whole or not at all; the rewriter lists wha
 unregistered build kept, and the NSP script reports it.
 """
 import ast
+import contextlib
 import copy
 import glob
 import importlib.util
+import io
 import os
 from pathlib import Path
 import struct
@@ -93,6 +95,18 @@ class Matching(unittest.TestCase):
         self.assertEqual(moved.match(rule)[0][0], 0x108)
         with self.assertRaisesRegex(MatchError, '0 matching'):
             Image(imported('free'), 0x2000).match(rule)
+
+    def test_system_call_wrapper_is_identified_by_its_number(self):
+        # the SDK's svc wrappers have no unwind entry: `svc #n; ret` stands for call n, and another number is another callee
+        def module(svc, at=0x500):
+            out = image({0x100: caller(0x100, at)})
+            struct.pack_into('<2I', out, at, 0xd4000001 | svc << 5, RET)
+            return out
+        rule = Image(module(0x2c), 0x2000).recipe(0x108, 'e00317aa', 'e0124091', 'heap')
+        self.assertEqual(Image(module(0x2c, 0x700), 0x2000).match(rule)[0][0], 0x108)
+        with self.assertRaisesRegex(MatchError, '0 matching'): Image(module(0x2d), 0x2000).match(rule)
+        longer = module(0x2c); struct.pack_into('<I', longer, 0x504, NOP)   # not a bare wrapper: no identity, no match
+        with self.assertRaisesRegex(MatchError, 'no verified boundary'): Image(longer, 0x2000).fingerprint(0x100)
 
     def test_address_register_clobbers_preserve_member_offsets(self):
         for reg, move in ((8, 0x2a0003e8), (29, 0xaa0003fd)):
@@ -208,6 +222,39 @@ class Matching(unittest.TestCase):
             self.assertEqual(bytes(img), bytes(self.original))
             rows = [l.split('\t') for l in (root / 'out/main.match.tsv').read_text().splitlines()[1:]]
             self.assertEqual(rows, [['registered', known, '1.0.1', '2']])
+            # the game's own build (a build row without CUTS) is no loss: no file
+            ns.update(d=bytes(0x40) + bytes.fromhex('cd' * 16), NAME='sdk', outdir=str(root / 'own'))
+            with patch.dict(os.environ, DM_GAME=gid): exec(code, ns)
+            self.assertFalse((root / 'own').exists())
+
+    def test_sdk_wide_rules_skip_the_games_own_builds(self):
+        # sdk_patches.py's MATCH_CUTS apply to every game's sdk of a build with no CUTS, unless the selected profile's build rows name it; a miss is not red
+        source = TOOLS / 'patch_nso.py'; tree = ast.parse(source.read_text())
+        start = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'PATCH_FILES')
+        end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'KEYS')
+        code = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
+        gid, own = '0100000000000001', 'cd' * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root / 'tools').mkdir()
+            (root / 'tools/sdk_patches.py').write_text(f'MATCH_CUTS = {{"sdk": [{self.rule!r}]}}\n')
+            g = root / 'games' / gid; g.mkdir(parents=True)
+            (g / 'game.tsv').write_text(f'build\tv0\t1.0.0\tmain={"ab" * 16}\tsdk={own}\n')
+            for name, bid, gamed, expected in (('sdk', '00' * 16, gid, ADD), ('sdk', own, gid, MOV), ('sdk', own, '0100000000000002', ADD), ('main', '00' * 16, gid, MOV)):
+                with self.subTest(module=name, build=bid, game=gamed):
+                    img, out = bytearray(self.original), root / 'out' / f'{name}{bid}{gamed}'
+                    ns = dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
+                              d=bytes(0x40) + bytes.fromhex(bid), IMG=img, TEXT_END=0x2000, NAME=name, outdir=str(out))
+                    with patch.dict(os.environ, DM_GAME=gamed): exec(code, ns)
+                    self.assertEqual(struct.unpack_from('<I', img, 0x108)[0], expected)
+                    if expected == ADD:
+                        self.assertEqual([l.split('\t')[:3] for l in (out / 'sdk.match.tsv').read_text().splitlines()[1:]], [['sdk', 'heap', '0x108']])
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                ns = dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
+                          d=bytes(0x40) + bytes(16), IMG=bytearray(image({0x100: [RET]})), TEXT_END=0x2000, NAME='sdk', outdir=str(root / 'miss'))
+                with patch.dict(os.environ, DM_GAME=gid): exec(code, ns)
+            self.assertIn("function patch 'heap' skipped", printed.getvalue())
+            self.assertNotIn('[RED]', printed.getvalue())
 
 
 class Patches(unittest.TestCase):
@@ -269,8 +316,12 @@ class Patches(unittest.TestCase):
             out = Path(tmp)
             (out / 'main.match.tsv').write_text('# main\nregistered\t' + 'ab' * 16 + '\t13.0.5\t11\n')
             (out / 'sdk.match.tsv').write_text('# sdk\npatch\tnode area\t0x10,0x20\timplementation 1 of 1\npatch\tregion\t-\tfunction 1 of 4: 0 matching functions\n')
+            (out / 'subsdk0.match.tsv').write_text('# sdk\nregistered\t' + 'cd' * 16 + '\t1.0\t2\nsdk\tnode area\t0x10,0x20\timplementation 1 of 1\nsdk\talignment\t-\t0 matching\n')
             said = []
             with patch.object(nsp, 'say', said.append): nsp.report_fix_coverage(out, ['main', 'sdk', 'subsdk0'], reg)
+        # an SDK-wide patch that applied carries the registered fixes: no red line, only what applied and what did not
+        self.assertEqual(said[3:], ["subsdk0: SDK-wide patches applied: 'node area';  with no reviewed implementation in this build, so not applied: 'alignment'"])
+        said = said[:3]
         self.assertEqual(len(said), 3, said)
         self.assertTrue(said[0].startswith('[RED] main: no function patch') and '13.0.5 (abababab…) has 11 cuts' in said[0], said[0])
         self.assertTrue(said[1].startswith('[RED] sdk: function patches not applied') and "'region' (function 1 of 4" in said[1], said[1])

@@ -34,6 +34,7 @@ No `pad_layout` key (the iPhone pad starts in the 3D layout).
 ## Services
 
 - **Resolved: a jump to pc=0 right after the NVN bootstrap loader** (`lr=main+0x37fe930`, `[RED] NVN address lookup of an unknown name: nvnSetExternalDebuggerEnabledNVX`). The game fetches an NVX extension of the SDK 8 driver by name and calls it without checking the pointer. The real driver has it, so it joins `dm/gfx/nvn/names.txt` as a no-op (thunks regenerated with `gen_protos.py`; no prototype in `nvn.h`, so `NVN_NOPROTO`).
+- **Resolved: only 64 of the 99 DLC licences were reported** (PR #441). Challenger Packs 1-4 and 11 (indices 2-5 and 12: Joker, Hero, Banjo & Kazooie, Terry and Sora), plus costume and spirit packs, were among the omissions. The contributor rebuilt the Mac app and confirmed all 99 indices in its startup log; the general fix is linked below. Integration also checked the actual 99 DLC folders with the host's count/list hooks under ASan/UBSan: the baseline returned 64, the candidate all 99 in order, including paginated queries. **Open:** DLC fighter availability in character select and an iOS rebuild with this fix have not been verified.
 
 ## Rendering
 
@@ -54,6 +55,7 @@ No `pad_layout` key (the iPhone pad starts in the 3D layout).
 
 General host changes first needed here; each applies to every game:
 
+- **The complete owned DLC list:** [Owned add-on content lists beyond 64 entries](../../../docs/reference/services.md#owned-add-on-content-lists-beyond-64-entries).
 - **NRO modules loaded at run time:** collected by the NRRs' SHA-256s (`nro_collect.py`, `nro.tsv`), rewritten (`patch_nso.py` reads NROs), mapped at start and activated by `nn::ro::LoadModule` / `UnloadModule` (`loader.c` "NRO modules", `hle_ro.c`; `DM_NRO=0` turns it off), embedded on iOS (`gen_embed.py`, `nro_pieces`): [Loading NROs with `ro::LoadModule`](../../../docs/reference/services.md#loading-nros-with-roloadmodule), [development.md, The packing script in detail](../../../docs/development.md#the-packing-script-in-detail).
 - **Register copies followed back to a jump table's base** (`copied_base`): [Far table base passed through other registers](../../../docs/reference/rewriter.md#far-table-base-passed-through-other-registers).
 - **`nvnSetExternalDebuggerEnabledNVX`** as a no-op (`names.txt`, `NVN_NOPROTO`): [Extensions fetched by name and called unchecked](../../../docs/reference/nvn-objects.md#extensions-fetched-by-name-and-called-unchecked).
