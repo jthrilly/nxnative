@@ -96,6 +96,12 @@ t_link_ticks: t_link_ticks.m $(MTL_T_DEP)
 check_t_link_ticks: t_link_ticks
 	./t_link_ticks
 run: check_t_link_ticks
+t_cpu_tex: t_cpu_tex.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_cpu_tex.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_cpu_tex
+check_t_cpu_tex: t_cpu_tex
+	MTL_DEBUG_LAYER=1 ./t_cpu_tex --metal
+run: check_t_cpu_tex
 t_cube_placeholder: t_cube_placeholder.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_cube_placeholder.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_cube_placeholder
@@ -174,6 +180,11 @@ t_pull_inv: t_pull_inv.m ../tools/dmsh_pull.py ../tools/dmsh_pull.metal
 	clang -O1 -g -Wall -fobjc-arc -o $@ t_pull_inv.m -framework Metal -framework Foundation
 t_pso_archive: t_pso_archive.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_archive.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_pso_archive
+check_t_pso_archive: t_pso_archive
+	MTL_DEBUG_LAYER=1 ./t_pso_archive
+	MTL_DEBUG_LAYER=1 python3 test_pso_archive.py $(CURDIR)/t_pso_archive
+run: check_t_pso_archive
 t_pso_bundle: t_pso_bundle.m ../tools/pso_offline.py $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_bundle.m $(MTL_T_SRC) $(FW)
 t_pso_warm: t_pso_warm.m $(MTL_T_DEP)
@@ -287,7 +298,6 @@ run: t_nvn t_dirty_slots t_dirty_race t_tex_layout t_builtin t_vin t_tbuf2d t_tb
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
 	./t_pso_skey
 	./t_pso_pending
-	MTL_DEBUG_LAYER=1 ./t_pso_archive
 	MTL_DEBUG_LAYER=1 ./t_pso_bundle
 	MTL_DEBUG_LAYER=1 ./t_pull
 	MTL_DEBUG_LAYER=1 ./t_pull_inv

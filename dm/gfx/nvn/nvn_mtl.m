@@ -1588,6 +1588,7 @@ static int alias_has(id o) { return g_alias_set && o && CFSetContainsValue(g_ali
 // Engage frees pools on scene changes and rebuilds on new ones, so the old pools' render targets and other private textures stayed in the table forever (about 0.8 GB more GPU memory over 850 s of the title demo), and linear textures built directly on a pool also kept the whole pool buffer alive.
 // Also, when a pool object's address is reused, old entries would hand a texture on the old storage to the new pool's texture at the same offset and description. Evicted textures go through deferred release; if the serial table still holds one, that is just one more reference
 static void treg_drop_pool_views(const void *pool);
+static void cpu_tex_drop_pool(const void *pool);
 void mtl_alias_drop_pool(const void *pool) {
     if (!pool) return;
     pthread_mutex_lock(&g_smu);
@@ -1610,6 +1611,7 @@ void mtl_alias_drop_pool(const void *pool) {
     if (n) { g_ser_gen++; g_alias_evicted += n; }
     pthread_mutex_unlock(&g_smu);
     free(ks);
+    cpu_tex_drop_pool(pool);
     treg_drop_pool_views(pool);   // outside g_smu: the texture ID registry lock g_rmu is taken before g_smu
 }
 // A new shared texture takes over storage: entries of the same pool whose storage overlaps the new texture's under another description go, unless a live texture object still resolves
@@ -2296,7 +2298,20 @@ static id<MTLTexture> tex_linear(const tex_t *t) {
 }
 // CPU-written block-linear textures (WriteTexels): the game gave no packaged layout and changes the content from the CPU each frame (Engage's movie frames: a Y plane R8 + a UV plane RG8, WriteTexels every frame).
 // Only packaged textures used to be uploaded from guest memory, so such a texture became a GPU-only texture whose content stayed 0. Their serials are recorded and they resolve through the packaged path (upload + re-upload on dirty pages)
-static pthread_mutex_t g_cpu_tex_mu = PTHREAD_MUTEX_INITIALIZER; static CFMutableSetRef g_cpu_tex;
+// Every texture resolve asks about CPU writes. Mix serial keys: consecutive serials in a callback-free CFSet made misses probe long bucket runs (see reference/frame-rate.md).
+// Finalize removes live membership, but command records and registered descriptors can still resolve the serial. Keep their classification until the storage pool is finalized;
+// a copied flag would miss writes made after recording. Retired metadata can grow while a pool lives: expiring it earlier requires tracking ownership of all snapshots.
+static pthread_mutex_t g_cpu_tex_mu = PTHREAD_MUTEX_INITIALIZER;
+static nvn_hmap g_cpu_tex = {.klen = 8}, g_cpu_tex_retired = {.klen = 8};   // serial → pool (or (void *)1 for a live test texture without a pool)
+static void cpu_tex_drop_pool(const void *pool) {
+    pthread_mutex_lock(&g_cpu_tex_mu);
+    nvn_hmap *maps[] = {&g_cpu_tex, &g_cpu_tex_retired};
+    for (unsigned m = 0; m < sizeof maps / sizeof *maps; m++)
+        for (uint32_t i = 0; i < maps[m]->cap;)
+            if (maps[m]->vals[i] == pool) { uint64_t serial; memcpy(&serial, maps[m]->keys + (size_t)i * 8, 8); nvn_hm_del(maps[m], &serial); }
+            else i++;
+    pthread_mutex_unlock(&g_cpu_tex_mu);
+}
 // The GPU owns the texture's content: its host texture was made to be rendered into or written by shaders (nvn_ft_poll in hle_nvn.c never re-uploads such a texture from guest memory)
 int mtl_tex_gpu_owned(uint64_t serial) {
     __unsafe_unretained id o = tex_get(serial);
@@ -2306,18 +2321,23 @@ int mtl_tex_gpu_owned(uint64_t serial) {
 void mtl_tex_cpu_written(const tex_t *t) {
     uint64_t serial = t->serial;
     if (!serial) return;
+    // nvn_ft_poll can mark a snapshot after Finalize. Serialize the live check with release (g_smu → g_cpu_tex_mu), so that mark goes straight to retired metadata.
+    pthread_mutex_lock(&g_smu);
     pthread_mutex_lock(&g_cpu_tex_mu);
-    if (!g_cpu_tex) g_cpu_tex = CFSetCreateMutable(NULL, 0, NULL);
-    int added = 0;
-    if (!CFSetContainsValue(g_cpu_tex, (const void *)(uintptr_t)serial)) {
-        CFSetAddValue(g_cpu_tex, (const void *)(uintptr_t)serial); added = 1;
+    int live = nvn_hm_get(&g_tex_live, &serial) != NULL;
+    if ((live || (t->pool && t->mem)) && !nvn_hm_get(&g_cpu_tex, &serial) && !nvn_hm_get(&g_cpu_tex_retired, &serial)) {
+        nvn_hm_put(live ? &g_cpu_tex : &g_cpu_tex_retired, &serial, t->pool ? (void *)t->pool : (void *)1);
+        g_ser_gen++;   // cached texture IDs resolve again through the packaged path (tex_by_id view_pkg)
         static int n; if (n++ < 16) MLOG("CPU-written texture ser=%llu %ux%ux%u format %#x target %d levels %u: uploaded / re-uploaded like a swizzled texture", (unsigned long long)serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.target, t->d.levels);
     }
     pthread_mutex_unlock(&g_cpu_tex_mu);
-    if (added) { pthread_mutex_lock(&g_smu); g_ser_gen++; pthread_mutex_unlock(&g_smu); }   // the texture IDs that resolve to it take the slow path, which now treats it as packaged (tex_by_id view_pkg)
+    pthread_mutex_unlock(&g_smu);
 }
+unsigned mtl_cpu_tex_count(void) { pthread_mutex_lock(&g_cpu_tex_mu); unsigned n = g_cpu_tex.n; pthread_mutex_unlock(&g_cpu_tex_mu); return n; }
 static int tex_cpu_written(uint64_t serial) {
-    pthread_mutex_lock(&g_cpu_tex_mu); int r = g_cpu_tex && CFSetContainsValue(g_cpu_tex, (const void *)(uintptr_t)serial); pthread_mutex_unlock(&g_cpu_tex_mu);
+    pthread_mutex_lock(&g_cpu_tex_mu);
+    int r = nvn_hm_get(&g_cpu_tex, &serial) != NULL || nvn_hm_get(&g_cpu_tex_retired, &serial) != NULL;
+    pthread_mutex_unlock(&g_cpu_tex_mu);
     return r;
 }
 static id<MTLTexture> tex_mtl_(const tex_t *ct);
@@ -2548,7 +2568,12 @@ uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }
 void mtl_vc_drop(uint64_t ser);
 void mtl_tex_release(tex_t *t) {
     if (!t->serial) return;
-    pthread_mutex_lock(&g_smu); nvn_hm_del(&g_tex_live, &t->serial); free(nvn_hm_del(&g_image_desc, &t->serial)); pthread_mutex_unlock(&g_smu);
+    pthread_mutex_lock(&g_smu); nvn_hm_del(&g_tex_live, &t->serial); free(nvn_hm_del(&g_image_desc, &t->serial));
+    pthread_mutex_lock(&g_cpu_tex_mu);
+    void *pool = nvn_hm_del(&g_cpu_tex, &t->serial);
+    if (pool && t->pool && t->mem) nvn_hm_put(&g_cpu_tex_retired, &t->serial, pool);
+    pthread_mutex_unlock(&g_cpu_tex_mu);
+    pthread_mutex_unlock(&g_smu);
     serial_del(t->serial);
     mtl_vc_drop(t->serial);
 }
@@ -4935,11 +4960,24 @@ static id<MTL4Compiler> g_comp4; static id<MTL4PipelineDataSetSerializer> g_ser4
 // themselves). A base with a layout is looked up in g_arch4 alone: each file a lookup misses in costs about 0.06 ms, and a cold start's misses were for such bases, in the 13 prebuilt files
 static NSArray<id<MTL4Archive>> *g_arch4, *g_arch4p; static NSString *g_arch_dir; static int g_arch_seq;
 // Compaction: every start writes a file or more (each flush captures only what is new), Breath of the Wild 5-7 per start, and each file a base is not in costs a lookup about 0.06 ms.
-// With more than PSO_ARCH_COMPACT files of bases with a vertex layout, the bases the prewarm takes from them are taken through the compiler with those files as its lookup archives,
-// which captures them again, so the flush after the prewarm writes them into one file; the old files are then removed (open archives stay usable for the rest of the run). Bases the
+// With more than PSO_ARCH_COMPACT files of bases with a vertex layout, the bases the prewarm takes from them are captured again from the original shader functions, so the flush
+// after the prewarm writes them into one file; the old files are then removed (open archives stay usable for the rest of the run). Bases the
 // prewarm did not take (pso_user.tsv never named them) go with them and are built again when drawn. The prebuild's files (p<seq>) are left as they are
 enum { PSO_ARCH_COMPACT = 8 };
-static MTL4CompilerTaskOptions *g_compact_opts; static NSArray<NSString *> *g_compact_files; static _Atomic int g_compacted;
+static int g_compact_enabled;   // immutable after pso4_init; unlike g_compact_files, never cleared by the archive queue
+static NSArray<NSString *> *g_compact_files; static _Atomic int g_compacted;
+// Keep the crash-recovery guard if a compaction still fails in Metal. Markers name the OS build and capture method: a marker from the old archive-import path must not
+// disable the safer original-function capture. A failed flush of this method disables compaction on this OS build until it changes; ordinary archive reads remain available.
+static NSString *arch_compact_marker(void) { return [g_arch_dir stringByAppendingPathComponent:@"compacting"]; }
+static NSString *arch_os_build(void) { char b[64] = ""; size_t n = sizeof b; sysctlbyname("kern.osversion", b, &n, NULL, 0); return [NSString stringWithFormat:@"os\t%s\n", b]; }
+static NSString *arch_compact_stamp(void) { return [arch_os_build() stringByAppendingString:@"capture\toriginal-functions-v1\n"]; }
+static int arch_compact_allowed(void) {
+    NSString *m = [NSString stringWithContentsOfFile:arch_compact_marker() encoding:NSUTF8StringEncoding error:nil];
+    if (!m) return 1;
+    if ([m isEqualToString:arch_compact_stamp()]) { MLOG("[RED] pipeline archive: a compaction did not finish on this system build (issue #342): the files are left as they are"); return 0; }
+    unlink(arch_compact_marker().fileSystemRepresentation);   // another system build or capture method: try once more
+    return 1;
+}
 static _Atomic int g_arch_new_vd;   // bases with a vertex layout captured since the last flush (counted under g_arch_rw's read side, read under its write side)
 static dispatch_queue_t g_arch_q; static _Atomic int g_arch_new, g_arch_sched;
 // Compiles with the serializer attached hold this shared, a flush holds it alone: a compile that finishes during serializeAsArchiveAndFlushToURL crashed in Metal
@@ -5050,7 +5088,7 @@ static void pso_bundle_open(NSMutableArray<id<MTL4Archive>> *archp) {
 // folder is shared by all of the user's programs and the process keeps nothing open in it, so the first capture after a flush (g_ga_mu) lists the folder before and after its
 // compile and takes the one folder that appeared as its own; the flush removes it (and exit, when no flush came). When more than one appeared (another program's capture in the
 // same few ms) none is touched. On iOS the folder is the app's own: the start removes what earlier runs left
-static pthread_mutex_t g_ga_mu = PTHREAD_MUTEX_INITIALIZER; static _Atomic int g_ga_seen, g_ga_recap; static NSString *g_ga_mine; static _Atomic int g_ga_said;
+static pthread_mutex_t g_ga_mu = PTHREAD_MUTEX_INITIALIZER; static _Atomic int g_ga_seen; static NSString *g_ga_mine; static _Atomic int g_ga_said;
 static NSString *ga_dir(void) {
     static NSString *dir; static dispatch_once_t once;
     dispatch_once(&once, ^{ char b[PATH_MAX]; if (confstr(_CS_DARWIN_USER_CACHE_DIR, b, sizeof b)) dir = [@(b) stringByAppendingPathComponent:@"com.apple.gpuarchiver"]; });
@@ -5061,14 +5099,12 @@ static NSSet<NSString *> *ga_list(void) {
     return [NSSet setWithArray:[a filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self BEGINSWITH 'gpuarchiver-'"]] ?: @[]];
 }
 // A compile the serializer captures, with g_arch_rw held shared: the first one after a flush notes the folder it made
-static id<MTLRenderPipelineState> ga_capture(MTL4RenderPipelineDescriptor *d, MTL4CompilerTaskOptions *o, NSError **e) {
-    // A recapture through lookup archives makes no folder at its compile (the flush makes it, ga_flushed): it takes none, or it could take another program's made meanwhile
-    if (o.lookupArchives.count) { atomic_store(&g_ga_recap, 1); return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e]; }
+static id<MTLRenderPipelineState> ga_capture(MTL4RenderPipelineDescriptor *d, NSError **e) {
     // other compiles do not wait for the one that looks: theirs land in the same folder (at worst one made before its first listing, so none is taken and the folder stays)
-    if (!g_ser4 || atomic_load(&g_ga_seen) || pthread_mutex_trylock(&g_ga_mu)) return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e];
-    if (atomic_load(&g_ga_seen)) { pthread_mutex_unlock(&g_ga_mu); return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e]; }
+    if (!g_ser4 || atomic_load(&g_ga_seen) || pthread_mutex_trylock(&g_ga_mu)) return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:e];
+    if (atomic_load(&g_ga_seen)) { pthread_mutex_unlock(&g_ga_mu); return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:e]; }
     NSSet<NSString *> *before = ga_list();
-    id<MTLRenderPipelineState> ps = [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:o error:e];
+    id<MTLRenderPipelineState> ps = [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:e];
     if (ps) {   // a failed compile may have captured nothing: the next capture looks again
         NSMutableSet<NSString *> *made = [ga_list() mutableCopy]; [made minusSet:before];
         if (made.count == 1) g_ga_mine = made.anyObject;
@@ -5083,15 +5119,9 @@ static void ga_remove(NSString *name) {
     if (name && ![NSFileManager.defaultManager removeItemAtPath:[ga_dir() stringByAppendingPathComponent:name] error:&e] && atomic_fetch_add(&g_ga_said, 1) < 4)
         MLOG("[RED] pipeline archive: Metal's build folder %s not removed (%s)", name.UTF8String, e.localizedDescription.UTF8String);
 }
-// After a flush wrote its file, with g_arch_rw held alone: its build folder goes. Bases recaptured through lookup archives (compaction) get theirs during the flush, not at
-// their compile: after such captures the one folder that appeared while it wrote (before: listed just before it) goes as well. Other flushes make none, so a folder appearing
-// then is another program's
-static void ga_flushed(NSSet<NSString *> *before) {
+// After a flush wrote its file, with g_arch_rw held alone: its build folder goes.
+static void ga_flushed(void) {
     ga_remove(g_ga_mine);
-    if (atomic_exchange(&g_ga_recap, 0)) {
-        NSMutableSet<NSString *> *made = [ga_list() mutableCopy]; [made minusSet:before];
-        if (made.count == 1) ga_remove(made.anyObject);
-    }
     g_ga_mine = nil; atomic_store(&g_ga_seen, 0);
 }
 // At exit: the folder of captures no flush wrote, unless a compile is still under way
@@ -5133,7 +5163,7 @@ static void pso4_init(void) {
                 else MLOG("[RED] pipeline archive file %s not usable (%s): its bases are built again", p.UTF8String, ae ? ae.localizedDescription.UTF8String : "not a pipeline archive");
                 g_arch_seq = MAX(g_arch_seq, [n substringFromIndex:pf].intValue + 1);
             }
-            if (runf.count > PSO_ARCH_COMPACT) { g_compact_opts = [MTL4CompilerTaskOptions new]; g_compact_opts.lookupArchives = arch; g_compact_files = runf; }
+            if (runf.count > PSO_ARCH_COMPACT && arch_compact_allowed()) { g_compact_enabled = 1; g_compact_files = runf; }
             MLOG("pipeline archive %s: %lu files (%lu of bases without a vertex layout), %.1f MB, opened in %.1f ms", g_arch_dir.UTF8String, (unsigned long)(arch.count + archp.count - (g_arch_bundle != nil)),
                  (unsigned long)archp.count - (g_arch_bundle != nil), bytes / 1048576.0, (bp_now() - t0) / 1e6);
         }
@@ -5148,7 +5178,7 @@ static void pso4_init(void) {
 static int g_arch_flush_ok;
 static void arch_flush(void) {
     // Keep all recaptured bases in one serialization, even when a prewarm lasts beyond the timer.
-    if (g_compact_opts && atomic_load(&g_warm_running)) return;
+    if (g_compact_enabled && atomic_load(&g_warm_running)) return;
     g_arch_flush_ok = 0;
     pthread_rwlock_wrlock(&g_arch_rw);
     int n = atomic_exchange(&g_arch_new, 0);
@@ -5157,9 +5187,11 @@ static void arch_flush(void) {
     uint64_t t0 = bp_now(); NSError *e = nil;
     int vd = atomic_exchange(&g_arch_new_vd, 0);   // exact: no compile is between capture and count while the write side is held
     NSString *path = [g_arch_dir stringByAppendingPathComponent:[NSString stringWithFormat:vd ? @"%05d.mtl4a" : @"p%05d.mtl4a", g_arch_seq++]], *tmp = [path stringByAppendingString:@".tmp"];
-    NSSet<NSString *> *ga_before = atomic_load(&g_ga_recap) ? ga_list() : nil;
+    int compacting = g_compact_files && g_compacted;   // this flush holds the recaptured bases (see arch_compact_allowed)
+    if (compacting) [arch_compact_stamp() writeToFile:arch_compact_marker() atomically:YES encoding:NSUTF8StringEncoding error:nil];
     BOOL ok = [g_ser4 serializeAsArchiveAndFlushToURL:[NSURL fileURLWithPath:tmp] error:&e];
-    if (ok) ga_flushed(ga_before);
+    if (compacting) unlink(arch_compact_marker().fileSystemRepresentation);
+    if (ok) ga_flushed();
     pthread_rwlock_unlock(&g_arch_rw);
     ok = ok && !rename(tmp.fileSystemRepresentation, path.fileSystemRepresentation);
     if (!ok) { MLOG("[RED] pipeline archive: writing %s failed%s%s", path.UTF8String, e ? ": " : "", e ? e.localizedDescription.UTF8String : ""); unlink(tmp.fileSystemRepresentation); return; }
@@ -5218,7 +5250,7 @@ static void pbase_key_of(MTLRenderPipelineDescriptor *d, pbase_key *k) {
     }
 }
 // The pipeline pso_desc describes: its base (built, from the archive or already made), then specialized with its colour state. Called on several threads.
-// compile 0: only when the base is made or in the archive (no wait for the Metal compiler: nil otherwise, *e untouched); the MTLDevice fallback then gives nil too
+// compile 0: nil on an archive miss (*e untouched), with no MTLDevice fallback. Prewarm compaction may still refresh a found base for serialization.
 static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, NSError **e, int compile) {
     pso4_init();
     int rast = d.rasterizationEnabled;
@@ -5251,16 +5283,18 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, N
         uint64_t t1 = bp_now();
         if (base) { g_pb_archived++; g_pt_hit_n++; g_pt_hit_ns += t1 - t0; }
         // the compile / flush lock only for what the serializer captures (a recapture or a compile): a compile 0 call that only looked in the archive must not wait for a flush
-        int recap = base && from_run && g_compact_opts && atomic_load(&g_warm_running), lk = recap || (!base && compile);
+        int recap = base && from_run && g_compact_enabled && atomic_load(&g_warm_running), lk = recap || (!base && compile);
         if (lk) pthread_rwlock_rdlock(&g_arch_rw);
-        if (recap) {   // compaction (see g_compact_opts): taken again through the compiler, which captures it
-            id<MTLRenderPipelineState> cb = ga_capture(b, g_compact_opts, nil);
+        if (recap) {
+            // Metal can crash in materializeAirNTFromOnlineForSlice when serializing archive imports mixed with fresh bases (#342).
+            // Work around that framework bug by capturing the original shader functions, without lookupArchives. The normal compiler cache still applies.
+            id<MTLRenderPipelineState> cb = ga_capture(b, nil);
             if (cb) { base = cb; atomic_fetch_add(&g_arch_new, 1); g_compacted++; if (vd) g_arch_new_vd++; }
         }
         if (!base) {
             if (g_arch4.count + g_arch4p.count) { g_pt_miss_n++; g_pt_miss_ns += t1 - t0; }
             if (compile) {
-                NSError *be = nil; base = ga_capture(b, nil, &be); job->error = be; job->compiled = 1;
+                NSError *be = nil; base = ga_capture(b, &be); job->error = be; job->compiled = 1;
                 g_pt_comp_ns += bp_now() - t1;
                 if (base) { g_pb_built++; if (vd) g_arch_new_vd++; if (g_ser4) arch_note_new(); }
             }
@@ -5488,7 +5522,7 @@ static void pre_pair(NSString *vk, NSString *fk, int zero) {
         for (id<MTL4Archive> a in g_arch4p) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
         for (id<MTL4Archive> a in g_arch4) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
         NSError *e = nil;
-        pthread_rwlock_rdlock(&g_arch_rw); id ps = ga_capture(m, nil, &e); pthread_rwlock_unlock(&g_arch_rw);
+        pthread_rwlock_rdlock(&g_arch_rw); id ps = ga_capture(m, &e); pthread_rwlock_unlock(&g_arch_rw);
         if (ps) { g_pre_built++; atomic_fetch_add(&g_arch_new, 1); }
         else { if (g_pre_failed++ < 4) MLOG("[RED] pipeline prebuild: the base of %s + %s failed: %s", vk.UTF8String, fk.UTF8String, e.localizedDescription.UTF8String); }
     }
@@ -9949,7 +9983,7 @@ static void td_dump(void) {
             static char buf[256]; size_t o = 0; for (int i = 0; i < g_texinfo_n; i++) o += snprintf(buf + o, sizeof buf - o, "%s%llu", i ? "," : "", (unsigned long long)g_texinfo_ser[i]);
             if (o) { static char env[300]; snprintf(env, sizeof env, "%s", buf); setenv("DM_NVN_TEXRAW", env, 1); q = getenv("DM_NVN_TEXRAW"); MLOG("[texraw] info → %s", q); } else continue;
         }
-        uint64_t ser = (uint64_t)atoll(q); id o = serial_get(ser);
+        uint64_t ser = (uint64_t)atoll(q); id o = tex_get(ser);
         id<MTLTexture> t = [o isKindOfClass:[NvPkg class]] ? ((NvPkg *)o)->tex : o;
         if (!t) { MLOG("[texraw] ser=%llu not in the serial table", ser); continue; }
         int bw, bh; NSUInteger w = t.width, h = t.height, dz = t.depth;

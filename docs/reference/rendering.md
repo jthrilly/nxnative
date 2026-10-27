@@ -140,6 +140,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** `nvn_tex.c` `sparse_tile_h` (see [Sparse textures take the block height of their 64 KB tile](#sparse-textures-take-the-block-height-of-their-64-kb-tile)): a sparse texture without a packaged layout and with 8 or 16 bytes per block takes 8-GOB blocks. `dm/gfx/tests/t_sparse_layout.c` checks 15 measured textures and Monster Hunter Rise's level offsets.
 - **Found on:** [Yoshi's Crafted World](../../dm/games/01006000040C2000/README.md): 9 streamed DXT5 textures (384×384 to 1920×912) overran their buffers by 0x8000–0x20000 bytes; after the fix none of 10,578 level copies did, and 10 of 10 boots ran clean.
 
+### Sparse textures smaller than a tile keep the automatic block height
+
+- **Symptom:** a small CPU-filled sparse texture shows part of its image beside fragments, cut off at the bottom (Yoshi's Crafted World's loading icon: the left half of a chalk drawing and two stray strokes).
+- **Cause:** a sparse texture smaller than one 64 KB tile in width or height is all mip tail, laid out as a plain texture with the [automatic block height](#automatic-block-height-truncates), but the host gave every sparse texture its tile's block height. The 192×160 DXT5 icon (12 × 5 GOBs, under the 16 × 8 GOBs of a 16-byte tile) is laid out in 4 GOBs and was read with 8; a 384×384 DXT1 (12 GOBs wide, under the 16-GOB tile width, 96 block rows) in 16, also read with 8. The storage sizes stay the same, so only the picture shows it.
+- **Fix:** `nvn_tex.c` `nvn_tex_layout` gives a sparse texture its tile's block height only when level 0 is at least one tile wide and high, the test `level_walk` uses for padding; the tile's shape for that test and for `nvn_tex_sparse_tiles` comes from the block size (`tile_shape_h`), not from the block height the texture got. `t_tex_layout.c` checks both block heights and the icon's tile shape.
+- **Found on:** [Yoshi's Crafted World](../../dm/games/01006000040C2000/README.md): the guest bytes of the icon and of the DXT1 deswizzled in Python read right only at 4 and 16 GOBs; its 384×384 DXT5 (24 GOBs wide, at least one tile) still reads right only padded to 32 GOBs at 8.
+
 ### Sparse textures bound from their first mapped level
 
 - **Symptom:** streamed textures read 0 (magenta on Monster Hunter Rise's title screen's clothes).
