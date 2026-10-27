@@ -94,7 +94,7 @@ class PackReuse(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='pack-reuse-', dir=TEST_ROOT)).resolve()
         self.addCleanup(shutil.rmtree, self.tmp)
         t = self.tmp
-        for d in ('patched', 'romfs/empty', 'msl', 'profile', 'font', 'aoc/1', 'pso', 'bin', 'sdk', 'source', 'host', 'tools'):
+        for d in ('patched', 'romfs/empty', 'msl', 'profile', 'font', 'aoc/1', 'pso', 'bin', 'sdk', 'source', 'host', 'tools', 'ios/Sources'):
             (t / d).mkdir(parents=True)
         files = {
             'dmhost': b'host', 'patched/main.patched.bin': b'code', 'patched/main.fixups.tsv': b'fixups',
@@ -104,34 +104,35 @@ class PackReuse(unittest.TestCase):
             'pso/prebuilt.tsv': b'prebuilt', 'pso/rest_pairs.tsv': b'rest', 'pso/archive.tsv': b'index',
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
             'host/romfs_image.h': b'validator', 'tools/romfs.py': b'reader',
+            'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows',
         }
         for n in pack_app.TABLES: files['profile/' + n] = n.encode()
         for n, content in files.items(): (t / n).write_bytes(content)
-        for tool in ('clang', 'codesign', 'other-codesign'):
+        for tool in ('clang', 'swiftc', 'codesign', 'other-codesign'):
             (t / 'bin' / tool).write_text('fake ' + tool); (t / 'bin' / tool).chmod(0o755)
         self.args = pack_app.parse([str(t / 'Game.app'), '--host', str(t / 'dmhost'), '--patched', str(t / 'patched'),
                                    '--romfs', str(t / 'romfs'), '--msl', str(t / 'msl'), '--tables', str(t / 'profile'), '--font', str(t / 'font'),
                                    '--aoc', str(t / 'aoc'), '--pso', str(t / 'pso'), '--pso-pairs', str(t / 'split.tsv'), '--env-file', str(t / 'env.txt'),
                                    '--title-id', TID, '--name', 'Test Game', '--marker', 'marker', '--icon', str(t / 'icon.jpg')])
         self.commands = []
-        self.clang_version, self.sdk_version = 'clang fixture 1', '27.0'
-        self.clang, self.sdk = t / 'bin/clang', t / 'sdk'
+        self.clang_version, self.swiftc_version, self.sdk_version = 'clang fixture 1', 'swiftc fixture 1', '27.0'
+        self.clang, self.swiftc, self.sdk = t / 'bin/clang', t / 'bin/swiftc', t / 'sdk'
         self.codesign = t / 'bin/codesign'
         self.failed_tool = None
         real_run, real_which = pack_app.run, shutil.which
         def fake_run(cmd):
             cmd = [str(c) for c in cmd]; self.commands.append(cmd)
             name = Path(cmd[0]).name
-            if self.failed_tool == name and (name != 'clang' or '-o' in cmd): raise SystemExit('fixture ' + name + ' failed')
+            if self.failed_tool == name and (name not in ('clang', 'swiftc') or '-o' in cmd): raise SystemExit('fixture ' + name + ' failed')
             if name == 'otool': return 'cmd LC_BUILD_VERSION\n minos 14.0\n'
             if name == 'xcrun':
-                if '--find' in cmd: return str(self.clang) + '\n'
+                if '--find' in cmd: return str(self.swiftc if 'swiftc' in cmd else self.clang) + '\n'
                 if '--show-sdk-path' in cmd: return str(self.sdk) + '\n'
                 if '--show-sdk-version' in cmd: return self.sdk_version + '\n'
                 if 'clang' in cmd: name = 'clang'
-            if name == 'clang':
-                if '--version' in cmd: return self.clang_version + '\n'
-                out = Path(cmd[cmd.index('-o') + 1]); out.write_bytes(b'fake launcher'); out.chmod(0o755); return ''
+            if name in ('clang', 'swiftc'):
+                if '--version' in cmd: return (self.clang_version if name == 'clang' else self.swiftc_version) + '\n'
+                out = Path(cmd[cmd.index('-o') + 1]); out.write_bytes(b'fake ' + name.encode()); out.chmod(0o755); return ''
             if name in ('codesign', 'other-codesign'): return ''
             if name == 'sips': Path(cmd[cmd.index('--out') + 1]).write_bytes(b'png'); return ''
             if name == 'iconutil': Path(cmd[cmd.index('-o') + 1]).write_bytes(b'icns'); return ''
@@ -181,7 +182,8 @@ class PackReuse(unittest.TestCase):
         self.pack()
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
-                 'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c']
+                 'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
+                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift']   # the settings window's sources
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:
             with self.subTest(name=name):
@@ -225,10 +227,21 @@ class PackReuse(unittest.TestCase):
         self.pack()
         self.clang_version = 'clang fixture 2'; self.assert_repacked()
         self.clang.write_text('changed compiler'); self.assert_repacked()
+        self.swiftc_version = 'swiftc fixture 2'; self.assert_repacked()
+        self.swiftc.write_text('changed Swift compiler'); self.assert_repacked()
         self.sdk_version = '28.0'; self.assert_repacked()
         self.sdk = self.tmp / 'other-sdk'; self.sdk.mkdir(); self.assert_repacked()
         self.codesign = self.tmp / 'bin/other-codesign'; self.assert_repacked()
         self.codesign.write_text('changed signing tool'); self.assert_repacked()
+
+    def test_launcher_is_linked_from_its_c_and_swift_sources(self):
+        self.pack()
+        c = next(c for c in self.commands if Path(c[0]).name == 'clang' and '-o' in c)
+        s = next(c for c in self.commands if Path(c[0]).name == 'swiftc' and '-o' in c)
+        self.assertIn('-c', c); self.assertIn('-parse-as-library', s)
+        self.assertEqual(s[s.index('-o') + 1], str(Path(self.args.out).resolve().with_name('Game.app.partial') / 'Contents/MacOS/nxnative'))
+        self.assertIn(c[c.index('-o') + 1], s)   # launcher.c's object, with its main
+        self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift'])
 
     def test_selected_file_modes_and_file_additions_and_removals_invalidate(self):
         self.pack()
@@ -285,7 +298,7 @@ class PackReuse(unittest.TestCase):
     def test_missing_selected_inputs_fail_before_reuse_or_partial_creation(self):
         self.pack()
         for name in ('dmhost', 'patched/main.fixups.tsv', 'msl/k.metallib', 'romfs/marker', 'pso/prebuilt.tsv', 'env.txt', 'icon.jpg',
-                     'font', 'aoc', 'profile', 'bin/clang', 'sdk', 'bin/codesign', 'source/launcher.c'):
+                     'font', 'aoc', 'profile', 'bin/clang', 'bin/swiftc', 'sdk', 'bin/codesign', 'source/launcher.c', 'source/Launcher.swift', 'ios/Sources/LauncherRow.swift'):
             with self.subTest(name=name):
                 p = self.tmp / name; hidden = p.with_name(p.name + '.hidden'); p.rename(hidden)
                 try:
@@ -298,7 +311,7 @@ class PackReuse(unittest.TestCase):
     def test_failed_repack_drops_key_and_keeps_old_app(self):
         self.pack()
         before = (Path(self.args.out) / 'Contents/Info.plist').read_bytes()
-        for tool in ('clang', 'codesign'):
+        for tool in ('clang', 'swiftc', 'codesign'):
             with self.subTest(tool=tool):
                 self.args.name += ' changed'; self.failed_tool = tool
                 with self.assertRaisesRegex(SystemExit, 'fixture'): self.pack()
@@ -369,11 +382,11 @@ class App(unittest.TestCase):
     @classmethod
     def tearDownClass(cls): shutil.rmtree(cls.tmp)
 
-    def launch(self, wait=False, app=None, **env):
+    def launch(self, wait=False, app=None, args=(), **env):
         home = self.tmp / 'home'
-        e = dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin', **env)
+        e = dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin', **{'DM_LAUNCHER': '0', **env})   # never the settings window in a test
         if wait: e['STANDIN_WAIT'] = '1'
-        return subprocess.Popen([(app or self.app) / 'Contents/MacOS/nxnative'], env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return subprocess.Popen([(app or self.app) / 'Contents/MacOS/nxnative', *args], env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     def host_run(self):
         out = {}
@@ -416,6 +429,16 @@ class App(unittest.TestCase):
         self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
         self.assertEqual(p['DMSettings'], [])   # launcher.json's settings, as the saved choices they accept: none here
 
+    def test_packed_language_is_the_lists(self):   # --lang a game lacks: the Game language row's default (settings.py: the game's first), with or without the window
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as d:
+            listed = Path(d) / 'launcher.json'
+            listed.write_text(json.dumps({'game': TID, 'settings': [{'env': 'DM_LANG', 'kind': 'choice', 'section': 'Game', 'label': 'Game language', 'note': '', 'default': 'ja',
+                                                                      'options': [['ja', 'Japanese'], ['ko', 'Korean']]}]}))
+            a = types.SimpleNamespace(**vars(self.args)); a.settings = str(listed)
+            self.assertEqual(pack_app.info_plist(a, '14.0', None)['DMLanguage'], 'ja')   # --lang fr
+            a.settings = None
+            self.assertEqual(pack_app.info_plist(a, '14.0', None)['DMLanguage'], 'fr')   # no list: --lang as given
+
     def test_saved_choices(self):
         """launcher.<VAR> in the app's preferences domain, as a front end or a settings window saves it: used from Finder or the Dock, checked against this build's settings,
         after the launch environment, the player's env.txt and the bundle's, and ignored with DM_SAVED_CHOICES=0"""
@@ -435,8 +458,8 @@ class App(unittest.TestCase):
             with mock.patch.object(pack_app, 'sign', lambda *x: None), mock.patch('sys.stdout'): pack_app.pack(a)
             return self.tmp / f'{name}.app'
 
-        def run(app, **env):
-            p = self.launch(app=app, **env); out = p.communicate(timeout=30)[0].decode()
+        def run(app, args=(), **env):
+            p = self.launch(app=app, args=args, **env); out = p.communicate(timeout=30)[0].decode()
             self.assertEqual(p.returncode, 7, out)
             return self.host_run()
 
@@ -452,14 +475,20 @@ class App(unittest.TestCase):
             self.assertEqual(r['DM_LANG'], 'ja')   # a saved choice before the packed language
             self.assertEqual((r['DM_BOTH'], r['DM_BAKED']), ('player', '1'))   # the player's env.txt and the bundle's win over a saved choice
             self.assertNotIn('DM_OPMODE', r)
+            self.assertEqual((r['DM_ENV_FILE_KEYS'], r['DM_ENV_LAUNCH_KEYS']), ('DM_BOTH DM_BAKED', ''))   # what the settings window keeps: the env files' variables
             r = run(app, DM_FPS_TARGET='60', DM_RENDER_SCALE='0.5')   # a front end's launch overrides: they win, and are not saved
             self.assertEqual((r['DM_FPS_TARGET'], r['DM_RENDER_SCALE']), ('60', '0.5'))
+            self.assertEqual(r['DM_ENV_LAUNCH_KEYS'], 'DM_FPS_TARGET DM_RENDER_SCALE')   # the window shows them fixed ("Set at launch")
+            r = run(app, args=['--no-launcher'], DM_LAUNCHER='1')   # open <app> --args --no-launcher: no window, the saved choices
+            self.assertEqual(r['DM_FPS_TARGET'], '30')
             self.assertEqual(subprocess.run(['defaults', 'read', domain, 'launcher.DM_FPS_TARGET'], capture_output=True, text=True).stdout.strip(), '30')
             r = run(app, DM_SAVED_CHOICES='0')
             self.assertEqual((r.get('DM_FPS_TARGET'), r.get('DM_RENDER_SCALE'), r['DM_LANG']), (None, None, 'fr'))
             save('DM_RENDER_SCALE', '-float', '0.75')   # not a string
             self.assertNotIn('DM_RENDER_SCALE', run(app))
             save('DM_RENDER_SCALE', '-string', ' 0.75')   # a number the iPhone's settings screen would not take either
+            self.assertNotIn('DM_RENDER_SCALE', run(app))
+            save('DM_RENDER_SCALE', '-string', '0x1p-1')   # hex, which neither side takes (Setting.accepts)
             self.assertNotIn('DM_RENDER_SCALE', run(app))
             listed['settings'][0]['options'] = [['60', '60 fps']]; listed['settings'][0]['default'] = '60'   # a rebuild that no longer offers 30 fps
             r = run(pack('Rebuilt', listed))
