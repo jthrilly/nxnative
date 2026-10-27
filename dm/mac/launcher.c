@@ -4,8 +4,11 @@
 // Bundle layout: Resources/romfs.img (the game's RomFS image; legacy romfs/ also supported), Resources/msl/<b-chain | vk | gl> (the Mac shader libraries), Resources/aoc/<index> (DLC), Resources/pso (the pipeline archive made
 // offline, handed to the host as DM_PSO_BUNDLE as the iOS app's main.m does), Resources/dm (the rewritten modules, the shader tables and pairs, font/, env.txt). Saves, the pipeline list and temporary files go to ~/Library/Application Support/nxnative/<title ID>/, the host's output to ~/Library/Logs/nxnative/<title ID>.log
 // (the previous run's kept as <title ID>.prev.log). Environment switches: one KEY=VALUE per line in <Application Support folder>/env.txt, then Resources/dm/env.txt (the first one wins; neither
-// replaces a variable already set), as the iOS app reads Documents/env.txt and dm/env.txt.
+// replaces a variable already set), as the iOS app reads Documents/env.txt and dm/env.txt. Then the player's saved choices: launcher.<VAR> strings in the app's preferences domain (its bundle ID), which a
+// front end or a settings window writes, each checked against the bundle's settings (Info.plist DMSettings, from launcher.json) and used only for a variable still unset; DM_SAVED_CHOICES=0 ignores them.
+// So the order is: the launch environment, the player's env.txt, the bundle's, saved choices, the host's tested defaults (docs/frontends.md, Saved choices).
 #include <CoreFoundation/CoreFoundation.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -72,6 +75,44 @@ static void env_file(const char *path) {   // KEY=VALUE lines, # starts a commen
     fclose(f);
 }
 
+static int saved_accepted(CFDictionaryRef rule, CFStringRef v, const char *s) {   // a saved choice this build still offers: one of its values, or a number in its range
+    CFTypeRef values = CFDictionaryGetValue(rule, CFSTR("values"));
+    if (values && CFGetTypeID(values) == CFArrayGetTypeID()) {
+        for (CFIndex i = 0; i < CFArrayGetCount(values); i++) {
+            CFTypeRef o = CFArrayGetValueAtIndex(values, i);
+            if (CFGetTypeID(o) == CFStringGetTypeID() && CFStringCompare(o, v, 0) == kCFCompareEqualTo) return 1;
+        }
+        return 0;
+    }
+    CFTypeRef lo = CFDictionaryGetValue(rule, CFSTR("min")), hi = CFDictionaryGetValue(rule, CFSTR("max")); double l, h;
+    if (!lo || !hi || CFGetTypeID(lo) != CFNumberGetTypeID() || CFGetTypeID(hi) != CFNumberGetTypeID()) return 0;
+    CFNumberGetValue(lo, kCFNumberDoubleType, &l); CFNumberGetValue(hi, kCFNumberDoubleType, &h);
+    char *end; double x = strtod(s, &end);
+    return *s && !isspace((unsigned char)*s) && !*end && x == x && x >= l && x <= h;   // as the iPhone's Double(): no leading space, no NaN
+}
+
+static void saved_choices(void) {   // after the env files, before the bundle's own defaults (DM_LANG): a variable already set keeps its value
+    CFBundleRef b = CFBundleGetMainBundle(); if (!b) return;
+    CFTypeRef rules = CFBundleGetValueForInfoDictionaryKey(b, CFSTR("DMSettings")); CFStringRef domain = CFBundleGetIdentifier(b);
+    if (!rules || CFGetTypeID(rules) != CFArrayGetTypeID() || !domain) return;   // packed without launcher settings: nothing to choose
+    const char *off = getenv("DM_SAVED_CHOICES");
+    if (off && !strcmp(off, "0")) { fprintf(stderr, "launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n"); return; }
+    for (CFIndex i = 0; i < CFArrayGetCount(rules); i++) {
+        CFTypeRef rule = CFArrayGetValueAtIndex(rules, i); char env[128], s[256];
+        if (CFGetTypeID(rule) != CFDictionaryGetTypeID()) continue;
+        CFTypeRef e = CFDictionaryGetValue(rule, CFSTR("env"));
+        if (!e || CFGetTypeID(e) != CFStringGetTypeID() || !CFStringGetCString(e, env, sizeof env, kCFStringEncodingUTF8)) continue;
+        CFStringRef key = CFStringCreateWithFormat(NULL, NULL, CFSTR("launcher.%@"), e);
+        CFPropertyListRef v = CFPreferencesCopyAppValue(key, domain); CFRelease(key);
+        if (!v) continue;
+        if (CFGetTypeID(v) != CFStringGetTypeID() || !CFStringGetCString(v, s, sizeof s, kCFStringEncodingUTF8)) fprintf(stderr, "launcher: saved choice for %s ignored: not a string of at most %zu bytes\n", env, sizeof s - 1);
+        else if (!saved_accepted(rule, v, s)) fprintf(stderr, "launcher: saved choice %s=%s ignored: this build does not offer it\n", env, s);
+        else if (getenv(env)) fprintf(stderr, "launcher: saved choice %s=%s not used: %s=%s is set (environment or env.txt)\n", env, s, env, getenv(env));
+        else { setenv(env, s, 0); fprintf(stderr, "launcher: env %s=%s (saved choice)\n", env, s); }
+        CFRelease(v);
+    }
+}
+
 int main(void) {
     char self[PATH_MAX], exe[PATH_MAX]; uint32_t n = sizeof self;
     if (_NSGetExecutablePath(self, &n) || !realpath(self, exe)) return 1;
@@ -106,6 +147,7 @@ int main(void) {
     fprintf(stderr, "launcher: %s (%s), host %s\n", name, id, host);
     snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
     snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
+    saved_choices();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_SAVE", save, 0); setenv("DM_TEMP", temp, 0);
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);
