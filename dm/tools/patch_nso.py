@@ -572,7 +572,7 @@ def check_before_copy(insl, ctx, ld, idx):
         if writes(p) & (idx | {src}): return None
     else: return None
     return ctx[k - 2]
-def jump_offsets(insl, j, copy_first=False, far_base=False):
+def jump_offsets(insl, j, copy_first=False, far_base=False, forward_base=False):
     """The br x18 is preceded by the offset-table form (Engage main+0x12eec94): cmp w18,#N; b.hi; ldrsw x18,[xB,x18,lsl #2]; add x18,x18,xB.
     The index may be another register, and the bounds check may be on a register copied into it: Link's Awakening's GLSLC (subsdk0+0x1be6e8) has
     sub w0,w18,#0xd1; cmp w0,#0x31; b.hi; ldrsw x18,[x17,x0,lsl #2], its movie module (subsdk1+0xae9a4) cmp w21,#7; b.hi; ...; mov w18,w21; ldrsw x18,[x4,x18,lsl #2].
@@ -589,7 +589,7 @@ def jump_offsets(insl, j, copy_first=False, far_base=False):
     ld = next((p for p in reversed(ctx) if p.mnemonic == 'ldrsw' and re.fullmatch(rf'{t}, \[{rb}, x(\d+), lsl #2\]', p.op_str)), None)
     if not ld: return None
     # GLSLC subsdk0+0x2f403c checks a masked copy instead: and w16,w18,#0x3f; cmp w16,#0xe; b.hi; ...; and x18,x18,#0x3f; ldrsw x18,[x15,x18,lsl #2]
-    idx = {'w' + re.fullmatch(rf'{t}, \[{rb}, x(\d+), lsl #2\]', ld.op_str).group(1)}
+    idx = {'w' + re.fullmatch(rf'{t}, \[{rb}, x(\d+), lsl #2\]', ld.op_str).group(1)}   # pyright: ignore[reportOptionalMemberAccess]  # ld was chosen by this match
     masked = None   # (source, mask, position) when the index is "source & mask"
     k0 = ctx.index(ld); cmp = None
     def wname(r): return 'w' + r[1:]
@@ -628,6 +628,7 @@ def jump_offsets(insl, j, copy_first=False, far_base=False):
         if lo is None and far_base:   # nothing writes the base in the window
             tb = table_base(insl, k, rb, far=True)
             if tb is None: tb = copied_base(insl, k, rb)   # built further back and copied on its way (below)
+            if tb is None and forward_base: tb = forward_table_base(insl, k, rb, n)
             if tb is None or tb + 4 * n > len(IMG): return None
             t = [tb + struct.unpack_from('<i', IMG, tb + 4 * i)[0] for i in range(n)]
             fa, fb = insl[0].address, insl[-1].address + 4
@@ -645,13 +646,45 @@ def jump_offsets(insl, j, copy_first=False, far_base=False):
     if page is None: return None
     tb = page + lo
     return [tb + struct.unpack_from('<i', IMG, tb + 4 * i)[0] for i in range(n)]
+def forward_table_base(insl, k, rb, n):
+    """A loop's base initialized after its dispatch in address order (Blasphemous 1.0.8 main+0xae95f8: x17 is set at +0xae96dc, then the block branches backward).
+    Used only after every older recognizer failed. Require exactly two writers of the full base in the function, an adjacent adrp + add after the load, no call that can clobber it,
+    and no known entry into the add that bypasses the adrp. Other values, 32-bit writes and multiple initializations are unproven and refused."""
+    if k < 2 or k + 2 >= len(insl): return None
+    guard, branch, load, add, jump = insl[k - 2:k + 3]
+    m = re.fullmatch(rf'(x\d+), \[{rb}, x(\d+), lsl #2\]', load.op_str)
+    if load.mnemonic != 'ldrsw' or not m or guard.mnemonic != 'cmp': return None
+    bound = re.fullmatch(rf'w{m.group(2)}, #(0x[0-9a-f]+|\d+)', guard.op_str)
+    if not bound or int(bound.group(1), 0) != n - 1: return None
+    if branch.mnemonic != 'b.hi' or add.mnemonic != 'add' or add.op_str != f'x18, {m.group(1)}, {rb}' or jump.mnemonic != 'br' or jump.op_str != 'x18': return None
+    if any(b.address != a.address + 4 for a, b in zip(insl[k - 2:k + 3], insl[k - 1:k + 3])): return None
+    protected = {p.address for p in insl[k - 1:k + 3]}
+    if any(p.mnemonic in ('bl', 'blr') for p in insl) and int(rb[1:]) <= 18: return None
+    base_names = {rb, 'w' + rb[1:]} | {alias for alias, reg in {'lr': 'x30', 'fp': 'x29'}.items() if reg == rb}
+    writers = [(i, p) for i, p in enumerate(insl) if p.mnemonic not in ('cmp', 'cmn', 'tst') and
+               any(p.reg_name(r) in base_names for r in p.regs_access()[1])]
+    if len(writers) != 2: return None
+    (i, p), (_, q) = writers
+    if i <= k or q.address != p.address + 4 or p.mnemonic != 'adrp' or not p.op_str.startswith(rb + ','): return None
+    m = re.fullmatch(rf'{rb}, {rb}, #(0x[0-9a-f]+|\d+)', q.op_str) if q.mnemonic == 'add' else None
+    if not m: return None
+    protected.add(q.address)
+    for x in insl:
+        if x.mnemonic in ('b', 'bl', 'cbz', 'cbnz', 'tbz', 'tbnz') or x.mnemonic.startswith('b.'):
+            if x.operands[-1].imm in protected: return None
+    if any(protected.intersection(targets) for targets in tabjumps.values()): return None
+    if any(any(base <= x < base + 4 * width for x in protected) for base, width in jumps.values()): return None
+    tb = p.operands[1].imm + int(m.group(1), 0)
+    if not 0 <= tb <= len(IMG) - 4 * n: return None
+    targets = {tb + struct.unpack_from('<i', IMG, tb + 4 * z)[0] for z in range(n)}
+    return tb if not protected.intersection(targets) and targets <= {x.address for x in insl} else None
 def table_base(insl, k, rb, far=False):
     """Address the table-base register rb holds at insl[k]: its writer chain before k must be add rb,rb,#lo after adrp rb (as in jump_offsets); None otherwise.
     The chain is searched 256 instructions back, or with far to the function's start, through no call when rb is caller-saved (capstone lists only x30 as a call's write; a call between
     means the code before it in address order is not the path that set rb)"""
     lo = None
     for p in reversed(insl[0 if far else max(0, k - 256):k]):
-        if far and p.mnemonic in ('bl', 'blr') and num(rb) <= 18: return None
+        if far and p.mnemonic in ('bl', 'blr') and num(rb) <= 18: return None   # pyright: ignore[reportOptionalOperand]  # a table base register, always xN
         _, w = p.regs_access()
         if not any(p.reg_name(r) == rb for r in w): continue
         if lo is None and p.mnemonic == 'add' and re.fullmatch(rf'{rb}, {rb}, #(0x[0-9a-f]+|\d+)', p.op_str): lo = int(p.op_str.split('#')[1], 0); continue
@@ -664,7 +697,7 @@ def copied_base(insl, k, rb):
     canon = {'lr': 'x30', 'fp': 'x29'}   # capstone's reg_name calls x30 lr and x29 fp
     lo, r = None, canon.get(rb, rb)
     for p in reversed(insl[:k]):
-        if p.mnemonic in ('bl', 'blr') and num(r) <= 18: return None
+        if p.mnemonic in ('bl', 'blr') and num(r) <= 18: return None   # pyright: ignore[reportOptionalOperand]  # a table base register, always xN
         _, w = p.regs_access()
         # A write to wN zeroes the upper half of xN too; it is a clobber, never a copy of the 64-bit base.
         if not any(canon.get(p.reg_name(x), p.reg_name(x)).replace('w', 'x', 1) == r for x in w): continue
@@ -981,6 +1014,7 @@ for fa, fb in funcs:
                 if not tgt: tgt = jump_offsets(insl, j, copy_first=True, far_base=True)   # the index copied before the check (check_before_copy) or the base set far back, only where every other form failed
                 if not tgt: tgt = jump_masked_pred(insl, j)   # the check on a masked copy made in the block, the index masked in the block that branches to it
                 if not tgt: tgt = jump_masked_not(insl, j)   # a complemented low-bit index with its zero case branched away: exactly mask entries
+                if not tgt: tgt = jump_offsets(insl, j, copy_first=True, far_base=True, forward_base=True)   # a unique base initialized in a later block that branches backward
                 assert tgt, f'jump table {ins.address:x}'
                 tabjumps[ins.address] = tgt; continue
             jumps[ins.address] = (base, width)
@@ -1040,16 +1074,20 @@ for a in sorted(kinds):
 
 def scratch_dead(off):
     """x9–x17 carry nothing at off: from off on, every one of them is written before it is read, up to a bl (a call clobbers them all; DRAGON QUEST VII Reimagined's gate sits on the
-    mov x0, x19 before one) or a ret (none of them carries a result under AAPCS64; Pikmin 4's gate sits on the ldp x29, x30 of an epilogue). Only straight-line code is followed: a branch
-    or a blr before the bl or ret answers no"""
-    written = set()
-    for a in range(off, min(off + 4 * 16, TEXT_END), 4):
+    mov x0, x19 before one) or a ret (none of them carries a result under AAPCS64; Pikmin 4's gate sits on the ldp x29, x30 of an epilogue). Only straight-line code is followed, through
+    unconditional b (the SDK's VammManager::AllocateAddressRegion jumps to its epilogue): a conditional branch or a blr before the bl or ret answers no"""
+    written, a = set(), off
+    for _ in range(16):
+        if not 0 <= a < TEXT_END: return False
         ins = dis(struct.unpack_from('<I', IMG, a)[0], a)
         if ins.mnemonic in ('bl', 'ret'): return True
-        if ins.mnemonic in ('b', 'br', 'blr', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'): return False
+        if ins.mnemonic == 'b':
+            a = ins.operands[0].imm; continue
+        if ins.mnemonic in ('br', 'blr', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'): return False
         rd, wr = regset(ins)
         if any(9 <= (num(r) or -1) <= 17 and num(r) not in written for r in rd): return False
         written |= {num(r) for r in wr}
+        a += 4
     return False
 
 obs = list(PATCHES['OBS'].get(BUILD_ID, []))
@@ -1062,6 +1100,49 @@ for off, oid, ow, why in obs:
     assert off in set(starts) or after_bl or scratch_dead(off), f'observation gate neither at a function entry, after a bl nor before a call with x9–x17 unread {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
+
+# ---- Address regions (every module that defines the SDK's VammManager: sdk) ----
+# Three observation gates, found by the SDK's own symbols in any build, let the host keep the table of address regions (hle_svc.c "Address regions"): the alias region space each takes,
+# who asked for it and how much of it is used. They only read registers. VammManager::AllocateAddressRegion(this, uintptr_t *out, size_t size): at its entry the size (x2) and the caller's
+# frames; at the one store of the region's address through out (copied from x1 in its prologue: str xA, [xB]) the address, A passed in the gate number's upper bits;
+# VammManager::FreeAddressRegion(this, address): at its entry. A build where one of them is not found that way gets none of them (logged); the host then has no region table
+OBS_REGION_ASK, OBS_REGION_GOT, OBS_REGION_FREE, OBS_STDALLOC_INIT = 22, 23, 24, 25   # dm/host/dm.h
+def region_gates():
+    from nso_syms import defined
+    sym = defined(IMG)
+    ask, free = sym.get('_ZN2nn2os6detail11VammManager21AllocateAddressRegionEPmm'), sym.get('_ZN2nn2os6detail11VammManager17FreeAddressRegionEm')
+    if not ask or not free: return [], None
+    from nso_code import out_store
+    try: got, reg = out_store(IMG, ask[0], ask[1], md)
+    except ValueError as e: return [], str(e)
+    sites = [(ask[0], OBS_REGION_ASK, 'VammManager::AllocateAddressRegion entry: the size in x2'),
+             (got, OBS_REGION_GOT | reg << 8, f'VammManager::AllocateAddressRegion: the new region\'s address in x{reg}, stored through the out pointer'),
+             (free[0], OBS_REGION_FREE, 'VammManager::FreeAddressRegion entry: the address in x1')]
+    for off, _, _ in sites:
+        after_bl = off >= 4 and struct.unpack_from('<I', IMG, off - 4)[0] >> 26 == 0x25
+        if not (off in set(starts) or after_bl or scratch_dead(off)) or off >= TEXT_END or off in kinds \
+                or any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]):
+            return [], f'no observation gate possible at {off:#x}'
+    return [(off, oid, f'{struct.unpack_from("<I", IMG, off)[0]:08x}', why) for off, oid, why in sites], None
+region_obs, why_not = region_gates()
+if why_not: print(f'{NAME}: no address region gates: {why_not}')
+# nn::mem::StandardAllocator::Initialize(this, void *address, size_t size[, bool]): at its entry the host gives a region of virtual address memory (address null) no more address space
+# than the alias region has room for (hle_svc.c "StandardAllocator's address space"): the SDK lays the region out from the size, so it holds all the way down. Both overloads (one may
+# tail-call the other: the second sees the size already given). The only gate here that writes a register (x2)
+def stdalloc_gates():
+    from nso_syms import defined
+    sym = defined(IMG)
+    out = []
+    for name in ('_ZN2nn3mem17StandardAllocator10InitializeEPvm', '_ZN2nn3mem17StandardAllocator10InitializeEPvmb'):
+        if name not in sym: continue
+        off = sym[name][0]
+        if off >= TEXT_END or off in kinds or any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]):
+            print(f'{NAME}: no StandardAllocator gate at {off:#x}: a rewrite site'); continue
+        out.append((off, OBS_STDALLOC_INIT, f'{struct.unpack_from("<I", IMG, off)[0]:08x}', f'StandardAllocator::Initialize(void *, size_t{", bool" if name.endswith("b") else ""}) entry: the size in x2, capped when the address in x1 is null'))
+    return out
+region_obs += stdalloc_gates()
+for off, oid, ow, why in region_obs: put_branch(off, site_obs(off, oid, int(ow, 16))); stat('obs')
+obs += region_obs
 
 # ---- Frame step in whole vsyncs (the mains whose patch file has FRAME_STEP: The Legend of Zelda: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0, Hyrule Warriors: Age of Calamity 1.3.0,
 # Paper Mario: The Thousand-Year Door 1.0.1 and ASTRAL CHAIN 1.0.1; host only) ----

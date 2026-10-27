@@ -65,9 +65,11 @@ ALLOW_SHADER_REGRESSIONS = False        # shaders that translated in this game's
 ALLOW_OTHER_METAL = False               # an NVN game's shaders are built only with the Metal compiler they were tested with (dm/gfx/tools/dmsh_chain.lock: Xcode 27.1); another one stops the build,
                                         #   as its shaders can render wrong pictures (GitHub issue #242). True builds them with this Mac's Metal compiler anyway
 PROVISIONAL = False                     # build from a provisional profile even when dm/games has one for the game (to test the guesses; the profile goes to PROFILE_OUT / <id>_build/profile)
-HEAP_CHECK = True                       # a provisional profile whose game has virtual address memory and sets a heap: boot it on the Mac until its heap request (a few seconds) to size the heap region
+HEAP_CHECK = True                       # a provisional profile whose game has virtual address memory and sets a heap: boot it on the Mac until its heap request (a few seconds) to size the heap region; with virtual address memory, the address region check too
 HEAP_CHECK_SECS = 30                    # the longest heap check (it stops at the first heap request, or HEAP_CHECK_NNMAIN_SECS into nnMain without one)
 HEAP_CHECK_NNMAIN_SECS = 5
+REGION_CHECK_NNMAIN_SECS = 15           # the address region check: the regions a game takes in nninitStartup and its first seconds in nnMain
+SWITCH_ALIAS = 0x1000000000             # the Switch's alias region (64 GB), which holds what a game reserves unchanged
 
 PROGRESS = 'auto'                       # stage lines on the console: 'bar' (one line per stage, redrawn in place), 'lines' (a plain line every BEAT seconds), 'off' (only each stage's start and end); 'auto' = bar in a terminal or Spyder, lines when the output goes to a file; 'json' = one JSON event per line, for a program that shows the build
 BEAT = 30                               # seconds between progress lines in 'lines' mode
@@ -1396,6 +1398,45 @@ def heap_check(repo, d, patched, work, env, logs, g):
     return type(g)(g.dir)
 
 
+def region_checked(g):   # the region check's stamp in the profile ("# address regions: ..."): later runs skip it
+    return any(l.startswith('# address regions: ') for l in (g.dir / 'game.tsv').read_text(encoding='utf-8').splitlines())
+
+
+def region_check(repo, d, patched, work, env, logs, g):
+    """The address region check of a provisional profile whose game has virtual address memory: the game boots in the Mac host (headless and silent, no shader libraries) with a
+    Switch-sized alias region (DM_ALIAS_SIZE), so whatever it reserves fits, until it has run REGION_CHECK_NNMAIN_SECS in nnMain. The host's region table (DM_REGIONS, from the
+    observation gates the rewriter places in the sdk) says which regions the game took, where each request returns to in the game, through which SDK API and how much of it it used, and where they reach
+    against the profile's alias region (profile_guess.py region_findings). A red line when they reach past it: on an iPhone a region would fail. Reported, not changed: the fix
+    depends on who lays the region out. The profile is stamped"""
+    PROG.stage('address regions')
+    host, rd, log, table = work / 'tools/dmhost', work / 'tmp/region_run', logs / 'region_check.log', logs / 'regions.tsv'
+    PROG.set(step='building the Mac host'); build_mac_host(repo, host, env, logs, g)
+    rmtree(rd); table.unlink(missing_ok=True)
+    for x in ('save', 'temp', 'msl'): (rd / x).mkdir(parents=True)
+    henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')),
+                DM_ALIAS_SIZE=f'{SWITCH_ALIAS:#x}', DM_REGIONS=str(table))
+    PROG.set(step='booting the game')
+    t0, seen = time.time(), {}
+    def done():
+        try: text = log.read_text(errors='replace')
+        except OSError: return False
+        if '>>> nnMain' in text: seen.setdefault('nnmain', time.time())
+        return time.time() - seen.get('nnmain', time.time()) > REGION_CHECK_NNMAIN_SECS
+    rc = boot_mac(host, patched, henv, rd, log, HEAP_CHECK_SECS + REGION_CHECK_NNMAIN_SECS, done)
+    rmtree(rd)
+    try: rows = table.read_text(errors='replace')
+    except OSError: rows = ''
+    import nso_syms
+    found = pg.region_findings(rows, int(g.get('mem_alias'), 0), nso_syms.defined(nso_syms.load(d / 'ExeFS/sdk')) if (d / 'ExeFS/sdk').exists() else {}, REGION_CHECK_NNMAIN_SECS)
+    if not rows: how = 'no region table (the sdk has no region gates)' if rc is None or '>>> nnMain' in log.read_text(errors='replace') else f'the host stopped before nnMain (exit {rc})'
+    elif not found: how = 'no address regions'
+    else: how = found[-1][1]
+    for red, text in found: say(('[RED] ' if red else '') + 'address regions: ' + text)
+    p = g.dir / 'game.tsv'; atomic_text(p, p.read_text(encoding='utf-8') + f'\n# address regions: {time.strftime("%Y-%m-%d")}, {how}\n')
+    PROG.end(f'{how} in {hms(time.time() - t0)}', ok=not any(red for red, _ in found))
+    return type(g)(g.dir)
+
+
 def data_rows(b):   # a table's data rows (without # comment lines: the header changes with the shader_split.py version, not with the game files)
     return [l for l in b.splitlines() if not l.startswith(b'#')]
 
@@ -1970,7 +2011,7 @@ def parse_args(argv):
                     '(dm/gfx/tools/dmsh_chain.lock, Xcode 27.1) instead of stopping; such shaders can render wrong pictures')
     ap.add_argument('--profile-out', help='where the provisional profile goes (default: <NSP folder>/<title ID>_build/profile)')
     ap.add_argument('--provisional', action='store_true', help='build from a provisional profile even when dm/games has one for the game (tests the guesses)')
-    ap.add_argument('--no-heap-check', action='store_true', help='a provisional profile: skip the heap check on the Mac (the alias / heap split stays a guess)')
+    ap.add_argument('--no-heap-check', action='store_true', help='a provisional profile: skip the heap check and the address region check on the Mac (the alias / heap split stays a guess)')
     ap.add_argument('--progress', choices=('auto', 'bar', 'lines', 'json', 'off'), help='stage lines on the console: bar = one line per stage, redrawn in place; lines = a plain line every BEAT seconds; json = newline-delimited JSON events (no prompts); off = only each stage\'s start and end '
                     '(default: the PROGRESS setting; auto = bar in a terminal or Spyder, lines when the output goes to a file or a pipe)')
     return ap.parse_args(argv)
@@ -2197,6 +2238,8 @@ def main(args=None):
         if provisional and heapck and pg.heap_check_needed(game / 'ExeFS'):
             if apple_silicon(): PROG.add(1); g = heap_check(repo, game, patched, work, env, logs, g)
             else: say('no heap check: it boots the game in the Mac host, which needs a Mac with Apple silicon; the profile keeps its guessed heap keys')
+        if provisional and HEAP_CHECK and not args.no_heap_check and pg.has_va(game / 'ExeFS') and not region_checked(g) and apple_silicon():   # where its address regions reach
+            PROG.add(1); g = region_check(repo, game, patched, work, env, logs, g)
     if glslc: capture_glslc(repo, {v: dirs[v] for v in sv}, pkg_ver, patched, work, env, logs, g)
     if uedec: decode_ue_shaders(repo, {v: dirs[v] for v in sv}, pkg_ver, patched, work, env, logs, g)
     sh = work / 'shader'

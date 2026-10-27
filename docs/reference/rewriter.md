@@ -89,6 +89,14 @@ To enroll a cut for any game's own module:
 - **Found on:** [Super Smash Bros. Ultimate](../../dm/games/01006A800016E000/README.md) 13.0.5 (SDK 8.2.1) `main+0x2b74458`: that `main`'s only unhandled site.
 - **Check:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md)'s three modules and Smash's `sdk` and movie module come out byte-identical.
 
+### Offset table base initialized after the dispatch
+
+- **Symptom:** `jump table ae95f8` assertion in `patch_nso.py` while rewriting Blasphemous 1.0.8.
+- **Cause:** the function enters an initialization block later in address order, then branches backward to `cmp w18,#9; b.hi; ldrsw x18,[x17,x18,lsl #2]; add x18,x18,x17; br x18`. The `adrp x17` / `add x17,x17,#lo` pair is after the dispatch, so the backward writer searches find no base.
+- **Fix:** a final `jump_offsets` fallback uses `forward_table_base` only when that adjacent full-width pair is the base register's sole initialization in the function. It rejects other writes, calls that can clobber the base, known branches or table targets entering the add without its adrp, out-of-image tables and targets that are not decoded instructions of the function. Earlier recognizers are unchanged.
+- **Found on:** [Blasphemous](../../dm/games/0100698009C6E000/README.md), `main+0xae95f8`, ten table-relative targets.
+- **Check:** `dm/tools/tests/test_jump_copies.py` covers the exact table extent, base clobbers, incoming edges, undecodable targets and out-of-image tables. The extracted function resolves to the ten targets read directly from its table.
+
 ### Offset tables relative to an adr
 
 - **Symptom:** `jump table <addr>` assertion, entries relative to an `adr`.

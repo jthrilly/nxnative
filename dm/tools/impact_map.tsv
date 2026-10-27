@@ -12,6 +12,8 @@ docs/*	-	documentation
 dm/tools/tests/*	-	tool tests
 dm/gfx/tests/*	-	graphics tests
 dm/host/tests/*	-	host tests
+dm/gfx/tex/tests/*	-	CPU texture tests
+dm/sanitizers/*	-	test sanitizer configuration
 dm/ios/tests/*	-	iOS tests
 .github/*	-	CI
 dm/games/*/README.md	-	a game's note
