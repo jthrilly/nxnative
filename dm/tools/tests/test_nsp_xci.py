@@ -50,10 +50,10 @@ class Xci(unittest.TestCase):
         work = self.tmp / 'work'; logs = work / 'logs'; logs.mkdir(parents=True)
         nsp_dlc = self.tmp / 'DLC [01006F8002327002][v0].nsp'; nsp_dlc.write_bytes(b'x'); fam['dlc'].append((APP + 0x1002, 0, nsp_dlc))
         self.assertEqual(nsp.extract_aoc(Path('nx'), Path('keys'), REPO, work, app, fam, logs), work / 'aoc')
-        self.assertEqual(sorted(p.name for p in (work / 'aoc').iterdir()), ['1', '2', '3'])
+        self.assertEqual(sorted(p.name for p in (work / 'aoc').iterdir()), ['1.img', '2.img', '3.img'])
         aoc = sorted((r for r in self.runs if r[0] == '--aoc'), key=lambda r: r[2])
-        self.assertEqual(aoc, [['--aoc', str(self.xci), str(work / 'aoc.partial/1'), f'{APP + 0x1001:016x}'], ['--aoc', str(nsp_dlc), str(work / 'aoc.partial/2')],   # the NSP wins
-                               ['--aoc', str(self.xci), str(work / 'aoc.partial/3'), f'{APP + 0x1003:016x}']])
+        self.assertEqual(aoc, [['--aoc', str(self.xci), str(work / 'aoc.partial/1.img'), '--romfs-image', f'{APP + 0x1001:016x}'], ['--aoc', str(nsp_dlc), str(work / 'aoc.partial/2.img'), '--romfs-image'],   # the NSP wins
+                               ['--aoc', str(self.xci), str(work / 'aoc.partial/3.img'), '--romfs-image', f'{APP + 0x1003:016x}']])
 
     def test_cartridge_without_dlc(self):
         self.xci.rename(self.tmp / 'Game [01006F8002326000][v0].xci')

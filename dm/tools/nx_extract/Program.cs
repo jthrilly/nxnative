@@ -1,14 +1,16 @@
-// NSP extraction: nx_extract <prod.keys> <base NSP> <update NSP or -> <output dir> [base RomFS dir to compare against] [--manifest]
-// Writes <output dir>/ExeFS and <output dir>/RomFS (the merged RomFS when there is an update); with a base RomFS dir, files whose content matches it become APFS clones (no new space).
+// NSP extraction: nx_extract <prod.keys> <base NSP> <update NSP or -> <output dir> [base RomFS dir to compare against] [--manifest] [--romfs-image]
+// --romfs-image streams the merged RomFS directly to <output dir>/RomFS.img (the packing script's default); only ExeFS is expanded. Without it, legacy folder extraction remains available.
+// With a base RomFS dir in legacy mode, files whose content matches it become APFS clones (no new space).
 // --manifest: the RomFS is not written, only a list <output dir>/romfs_manifest.tsv (path, size, first 32 bytes), for surveying a new game (a large game's RomFS is well over 10 GB).
 // A damaged NSP (a file whose data fails the NCA's hash check, e.g. a copy cut short or a broken download) stops the extraction with exit code 3 after listing every damaged file;
 //   --allow-damaged writes those files as read instead and only lists them (Super Mario Galaxy's base NSP with 147 MB zeroed: its two prologue WebM movies).
-// Add-on content: nx_extract <prod.keys> --aoc <DLC NSP> <output dir> [title ID] writes the RomFS of the DLC's data NCA to <output dir> (the packing script puts it at aoc/<index>/, the host mounts it through DM_AOC_DIR).
+// Add-on content: nx_extract <prod.keys> --aoc <DLC NSP> <output dir or image> [--romfs-image] [title ID] writes the RomFS of the DLC's data NCA to <output dir>, or with --romfs-image as one image (the packing script puts it at aoc/<index>.img, the host mounts it through DM_AOC_DIR).
 // A package may hold several titles (a merged XCI: Animal Crossing's holds the base game, update 2.0.5 and 3 DLC): each part is taken from the NCAs its content meta (cnmt) lists, the base game's
 //   from the Application meta, the update's from the Patch meta, a DLC's from the AddOnContent meta of that title ID. The same XCI may be given as base and update; without a Patch meta it is the base alone.
 // Listing: nx_extract <prod.keys> --list <NSP or XCI> prints one line per content meta: <title ID> <Application|Patch|AddOnContent> v<version>.
 // Title keys come from the common tickets (.tik) inside the NSPs, so only prod.keys is needed; key values are never printed.
 // The base game may also be a cartridge dump (.xci, Monster Hunter Rise): its secure partition holds the NCAs, which carry their keys in the key area (no ticket).
+//   When the cartridge also carries an update (1G+1U), only the base game's NCAs (those its Application content meta lists) are read; the update comes from the update NSP, or from the same XCI given again as the update.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -23,8 +25,8 @@ using LibHac.Spl;
 using LibHac.Tools.Fs;
 using LibHac.Tools.FsSystem;
 using LibHac.Tools.FsSystem.NcaUtils;
-using LibHac.Tools.Ncm;
 using LibHac.Tools.FsSystem.RomFs;
+using LibHac.Tools.Ncm;
 using Path = System.IO.Path;
 
 static class P {
@@ -32,11 +34,12 @@ static class P {
 
     static int Main(string[] a) {
         bool manifest = Array.IndexOf(a, "--manifest") >= 0; a = Array.FindAll(a, s => s != "--manifest");
+        bool image = Array.IndexOf(a, "--romfs-image") >= 0; a = Array.FindAll(a, s => s != "--romfs-image");
         g_allow = Array.IndexOf(a, "--allow-damaged") >= 0; a = Array.FindAll(a, s => s != "--allow-damaged");
         if (a.Length == 3 && a[1] == "--list") return List(ExternalKeyReader.ReadKeyFile(a[0]), a[2]);
-        if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir> [title ID]\n       nx_extract <prod.keys> --list <nsp|xci>"); return 2; }
+        if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--romfs-image|--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [--romfs-image] [title ID]\n       nx_extract <prod.keys> --list <nsp|xci>"); return 2; }
         KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
-        if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], a.Length > 4 ? Convert.ToUInt64(a[4], 16) : null);
+        if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], a.Length > 4 ? Convert.ToUInt64(a[4], 16) : null, image);
         var basePkg = OpenNsp(ks, a[1], ContentMetaType.Application); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2], ContentMetaType.Patch, optional: a[2] == a[1]);
         if (updPkg != null && updPkg.Count == 0) { Console.WriteLine($"no update in {a[2]}: the base game alone"); updPkg = null; }
         Nca baseProg = Pick(basePkg, NcaContentType.Program) ?? throw new Exception("no Program NCA in the base NSP");
@@ -65,7 +68,8 @@ static class P {
         // A program can embed all assets in its code modules (ANIMAL WELL 1.0.10).
         // Preserve the extraction layout without asking LibHac to open an absent section.
         if (!baseProg.SectionExists(1) && (updProg == null || !updProg.SectionExists(1))) {
-            Directory.CreateDirectory(Path.Combine(outDir, "RomFS"));
+            if (image && !manifest) WriteImage(null, Path.Combine(outDir, "RomFS.img"));
+            else if (!manifest) Directory.CreateDirectory(Path.Combine(outDir, "RomFS"));
             if (manifest) File.WriteAllText(Path.Combine(outDir, "romfs_manifest.tsv"), "# path\tbytes\tfirst 32 bytes (hex)\n");
             Console.WriteLine("program has no data section: empty RomFS");
             return Damaged();
@@ -74,6 +78,7 @@ static class P {
         // the same RomFS without hash checks, for reading damaged files as they are (--allow-damaged)
         g_lenient = () => new RomFsFileSystem(updProg != null ? baseProg.OpenStorageWithPatch(updProg, NcaSectionType.Data, IntegrityCheckLevel.IgnoreOnInvalid) : baseProg.OpenStorage(NcaSectionType.Data, IntegrityCheckLevel.IgnoreOnInvalid));
         if (manifest) Manifest(new RomFsFileSystem(romfs), Path.Combine(outDir, "romfs_manifest.tsv"));
+        else if (image) WriteImage(new RomFsFileSystem(romfs), Path.Combine(outDir, "RomFS.img"));
         else Copy(new RomFsFileSystem(romfs), Path.Combine(outDir, "RomFS"), cmpDir);
         return Damaged();
     }
@@ -91,13 +96,15 @@ static class P {
     }
 
     // DLC NSP: one data NCA (content type PublicData / Data) + a meta NCA + the ticket; only the data NCA's RomFS is written
-    static int Aoc(KeySet ks, string nsp, string outDir, ulong? id) {
+    static int Aoc(KeySet ks, string nsp, string outDir, ulong? id, bool image) {
         var pkg = OpenNsp(ks, nsp, ContentMetaType.AddOnContent, id: id);
         Nca data = Pick(pkg, NcaContentType.PublicData) ?? Pick(pkg, NcaContentType.Data) ?? throw new Exception("no data NCA in the DLC NSP");
         Console.WriteLine($"add-on content {data.Header.TitleId:x16}");
-        Directory.CreateDirectory(outDir);
-        Copy(new RomFsFileSystem(data.OpenStorage(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid)), outDir, null);
-        return 0;
+        Directory.CreateDirectory(image ? Path.GetDirectoryName(outDir) : outDir);
+        var fs = new RomFsFileSystem(data.OpenStorage(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid));
+        g_lenient = () => new RomFsFileSystem(data.OpenStorage(NcaSectionType.Data, IntegrityCheckLevel.IgnoreOnInvalid));
+        if (image) WriteImage(fs, outDir); else Copy(fs, outDir, null);
+        return Damaged();
     }
 
     static int List(KeySet ks, string path) {
@@ -106,7 +113,8 @@ static class P {
     }
 
     // The NCAs of one part of a package: those the content metas of that type (and title ID) list. A package with no meta of that type: all its NCAs when it has no metas at all,
-    //   else an error, or none when optional (an XCI given as its own update)
+    //   else an error, or none when optional (an XCI given as its own update). A cartridge dump with its update on it (1G+1U) holds the update's NCAs beside the base game's,
+    //   its Program NCA under the same title ID, so the base game takes only those its Application meta lists
     static List<Nca> OpenNsp(KeySet ks, string path, ContentMetaType type, bool optional = false, ulong? id = null) {
         var (ncas, metas) = Package(ks, path);
         if (metas.Count == 0) return new List<Nca>(ncas.Values);
@@ -118,6 +126,12 @@ static class P {
         var r = new List<Nca>();
         foreach (Cnmt m in want) foreach (CnmtContentEntry e in m.ContentEntries)
             if (ncas.TryGetValue(Convert.ToHexString(e.NcaId).ToLowerInvariant(), out Nca n)) r.Add(n);
+        if (!r.Exists(n => n.Header.ContentType != NcaContentType.Meta)) {   // file names that are not content IDs (renamed NCAs): nothing matches, so read every NCA as before
+            Console.WriteLine($"[RED] no NCA of {Path.GetFileName(path)} matches its {type} content meta by name (renamed NCA files?); reading all {ncas.Count}");
+            return new List<Nca>(ncas.Values);
+        }
+        int other = 0; foreach (Nca n in ncas.Values) if (!r.Contains(n) && n.Header.ContentType != NcaContentType.Meta) other++;   // the meta NCAs list the others, not themselves
+        if (other > 0) Console.WriteLine($"leaving out {other} NCAs of {Path.GetFileName(path)} that its {type} content meta does not list (another title in the package)");
         return r;
     }
 
@@ -205,6 +219,76 @@ static class P {
             if (len > 0) return System.Text.Encoding.UTF8.GetString(t, i * 0x300, len);
         }
         return "";
+    }
+
+    sealed class ImageEntry {
+        public string Path; public byte[] Name; public bool Directory; public long Size; public ulong A, B;
+        public List<ImageEntry> Children = new List<ImageEntry>();
+    }
+    // Stream the merged, integrity-checked filesystem directly into DMROMFS1. No RomFS directories or per-resource host files are created.
+    static void WriteImage(IFileSystem fs, string dst) {
+        var root = new ImageEntry { Path = "/", Name = Array.Empty<byte>(), Directory = true };
+        var byPath = new Dictionary<string, ImageEntry>(StringComparer.Ordinal) { ["/"] = root };
+        if (fs != null) foreach (DirectoryEntryEx e in fs.EnumerateEntries("*", SearchOptions.RecurseSubdirectories)) {
+            string path = e.FullPath.TrimEnd('/'); if (path.Length == 0) continue;
+            byte[] name = System.Text.Encoding.UTF8.GetBytes(path.Substring(path.LastIndexOf('/') + 1));
+            if (name.Length == 0 || name.Length > 0x300) throw new IOException($"invalid RomFS name length: {path}");
+            byPath.Add(path, new ImageEntry { Path = path, Name = name, Directory = e.Type == DirectoryEntryType.Directory, Size = e.Size });
+        }
+        foreach (var e in byPath.Values) {
+            if (e == root) continue;
+            string parent = e.Path.Substring(0, e.Path.LastIndexOf('/')); if (parent.Length == 0) parent = "/";
+            byPath[parent].Children.Add(e);
+        }
+        var entries = new List<ImageEntry> { root };
+        for (int i = 0; i < entries.Count; i++) if (entries[i].Directory) {
+            var e = entries[i]; e.Children.Sort((a, b) => a.Name.AsSpan().SequenceCompareTo(b.Name));
+            e.A = (ulong)entries.Count; e.B = (ulong)e.Children.Count; entries.AddRange(e.Children);
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(dst));
+        string part = dst + ".part"; long files = 0, bytes = 0; int damaged = g_damaged.Count;
+        try {
+            using (var output = File.Create(part)) using (var writer = new BinaryWriter(output)) {
+                writer.Write(new byte[32]); byte[] buffer = new byte[4 << 20];
+                foreach (var e in entries) {
+                    if (e.Directory) continue;
+                    e.A = (ulong)output.Position; e.B = (ulong)e.Size; files++; bytes += e.Size;
+                    using var f = new UniqueRef<IFile>();
+                    fs.OpenFile(ref f.Ref, e.Path.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                    try { WriteStream(f.Get, output, e.Size, buffer); }
+                    catch (HorizonResultException x) when (HashError(x)) {
+                        g_damaged.Add(e.Path);
+                        if (!g_allow) continue;
+                        g_lenientFs ??= g_lenient();
+                        using var lf = new UniqueRef<IFile>();
+                        g_lenientFs.OpenFile(ref lf.Ref, e.Path.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                        output.Position = (long)e.A; output.SetLength(output.Position);
+                        WriteStream(lf.Get, output, e.Size, buffer);
+                    }
+                }
+                if (g_damaged.Count == damaged || g_allow) {
+                    long index = output.Position; using var names = new MemoryStream();
+                    foreach (var e in entries) {
+                        writer.Write(e.A); writer.Write(e.B); writer.Write(checked((uint)names.Position));
+                        writer.Write(checked((ushort)e.Name.Length)); writer.Write((byte)(e.Directory ? 0 : 1)); writer.Write((byte)0);
+                        names.Write(e.Name);
+                    }
+                    names.Position = 0; names.CopyTo(output); long size = output.Position - index;
+                    output.Position = 0; writer.Write(System.Text.Encoding.ASCII.GetBytes("DMROMFS1"));
+                    writer.Write((ulong)index); writer.Write((ulong)size); writer.Write((ulong)entries.Count);
+                }
+            }
+            if (g_damaged.Count != damaged && !g_allow) { File.Delete(part); return; }
+            File.Move(part, dst, true);
+            Console.WriteLine($"{dst}: {files} files {bytes / 1048576.0:F1} MB, image with {entries.Count} entries");
+        } catch { File.Delete(part); throw; }
+    }
+    static void WriteStream(IFile file, Stream output, long size, byte[] buffer) {
+        for (long offset = 0; offset < size;) {
+            file.Read(out long got, offset, buffer.AsSpan(0, (int)Math.Min(buffer.Length, size - offset)), ReadOption.None).ThrowIfFailure();
+            if (got <= 0) throw new IOException($"cannot read @{offset}");
+            output.Write(buffer, 0, (int)got); offset += got;
+        }
     }
 
     // Copy out file by file; files identical to the same path in the compare dir become APFS clones instead
