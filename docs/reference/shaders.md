@@ -62,6 +62,13 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Fix:** `shader_split.py` `gfpak_members` reads the BNSH entries of GFPAK archives (LZ4 entries, [01](../agents/01-extract.md)).
 - **Found on:** [Pokémon Sword](../../dm/games/0100ABF008968000/README.md): 41,516 shaders, nearly all BNSH entries of the 7,699 GFPAK archives under `bin/archive` (the models' and effects' shader archives), beside loose BNSH files (`bin/battle/waza/model/**/*.bnsh_vsh` / `_fsh`, `bin/graphics`, `system_resource/shader`) and two in `main`. The YEBIS shaders it also draws are in `main` ([Shaders in a zlib stream in main](#shaders-in-a-zlib-stream-in-main-yebis-tfxo)).
 
+### Oodle entries of GFPAK archives
+
+- **Symptom:** the split counts hundreds of files as unreadable (678 on Pokémon Legends: Arceus), each with `[RED] <file>.gfpak: entry 0 has compression 3 (Oodle), which this reader does not decode`, and leaves their shaders out.
+- **Cause:** every entry of Arceus's GFPAKs is compression 3, Oodle Kraken, where every entry of Sword's is LZ4 ([BNSH entries of GFPAK archives](#bnsh-entries-of-gfpak-archives)).
+- **Fix:** `shader_split.py` `gfpak_members` decodes compression 3 with the game's own decoder, as it decodes [Trinity packs](#bnsh-in-trinity-packs) (`oodle`, `DM_OODLE_HOST` / `DM_OODLE_MODULES`). `profile_guess.py` `build_sources` counts the GFPAKs that hold an Oodle entry, so the NSP script sets that decoder up for the split (`oodle_packs`). `dm/gfx/tests/test_gfpak.py` covers each compression. The Mac path was checked without Arceus's files: a GFPAK of 300 Kraken streams from Pokémon Scarlet's packs (28 MB raw), read by `gfpak_members` through the Mac host, decodes the same with Scarlet's and Z-A's `OodleLZ_Decompress`, and `build_sources` sets `oodle_packs` for it but not for an LZ4-only GFPAK.
+- **Found on:** Pokémon Legends: Arceus 1.0.2 (`01001F5010DFA000`, no profile yet; `main` has `OodleLZ_Decompress`): all 678 GFPAKs under `bin/archive`, Oodle in every entry. The provisional split finds 12,851 shaders with them, 69 more than without. 73 shader map rows first appear in a GFPAK: `field/resident_release.gfpak` 40, `appli/battle_resident.gfpak` 26, `appli/system_resident.gfpak` 5, `appli/poke_dex.gfpak` 2.
+
 ### BNSH in Trinity packs
 
 - **How it is stored:** every shader is a BNSH inside the Oodle-compressed files of `arc/data.trpfs` ([01](../agents/01-extract.md)).
@@ -301,6 +308,13 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **How it is stored:** the desktop renderer (`SF_GLSL_SWITCH`) with the same `LSLG` records, but no archive in the pak: the two libraries are IoStore shader libraries in `FFRS-Switch.ucas`, whose shader groups are Oodle-compressed as a whole ([01](../agents/01-extract.md)). Each shader entry packs its frequency (bits 0–3), group (4–33) and offset in the group's decoded bytes (from bit 34), and a shader runs to the next one's offset.
 - **Reader:** `uepak.py` writes them out as version 2 archives, so the split reads them as any other.
 - **Found on:** [FINAL FANTASY RESONANCE](../../dm/games/0100606026F12000/README.md) (Unreal Engine 5.6.1): 73,496 unique shaders (9,253 vertex, 61,305 pixel, 2,934 compute, 4 geometry).
+
+### IoStore patch containers keep their shader groups in the base container
+
+- **Symptom:** `ValueError: …/Glow-Switch_0_P.utoc: shader group 0 has no chunk` from `uepak.py io_archive` while the NSP script decodes the shaders (`decode_ue_shaders`, after `[4/8] UE shader decode`).
+- **Cause:** an update's IoStore container is a patch: its shader libraries have the base game's chunk IDs (so they replace their tables), and an unchanged shader group is listed with the base container's chunk ID. `io_archive` looked every group up in the container the library chunk came from.
+- **Fix:** `uepak.py` reads every `.utoc` under the RomFS (`io_tocs`, in mount order: the base game's containers, then `_P` patches and numbered `_0_P`, `_1_P`, … patches, `mount_order`, case-insensitive `_P` marker) and resolves a group's chunk ID in any of them; a library chunk ID two containers share is taken from the later (patch) one, whose tables are the current set. TOC metadata is read without a key; `Toc.read` refuses encrypted data without a key only when the selected library or group needs it, so an encrypted group-only container is refused and a fully superseded encrypted library is never read.
+- **Found on:** LEGO Horizon Adventures (update v262144, Unreal Engine 5; provisional profile): the update's `Glow/Content/Paks/Glow-Switch_0_P.utoc` over the base's `Glow-Switch.utoc`; 20,889 shaders in its two libraries, 20,880 unique after the split.
 
 ### Unreal Engine 4.18 shaders inline in cooked packages
 
