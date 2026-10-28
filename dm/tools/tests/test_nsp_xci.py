@@ -19,7 +19,7 @@ LISTING = f'{APP:016x} Application v0\n{APP | 0x800:016x} Patch v1769472\n{APP +
 class Xci(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp)
-        self.xci = self.tmp / NAME; self.xci.write_bytes(b'HEAD')
+        self.xci = self.tmp / NAME; self.xci.write_bytes(bytes(0x100) + b'HEAD')   # a card header: scan_nsps takes a file by its header (is_package)
         self.runs = []
         for cm in (mock.patch.object(nsp, 'PROG', mock.Mock()), mock.patch.object(nsp, 'say', lambda m: None), mock.patch.object(nsp, 'run', self.fake_nx)):
             cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
@@ -41,14 +41,14 @@ class Xci(unittest.TestCase):
         self.assertEqual((app, fam['base'].name, fam['updates']), (APP, 'Game [01006F8002326000][v0].xci', []))
 
     def test_an_update_nsp_beside(self):
-        upd = self.tmp / 'Update [01006F8002326800][v2228224].nsp'; upd.write_bytes(b'x')
+        upd = self.tmp / 'Update [01006F8002326800][v2228224].nsp'; upd.write_bytes(b'PFS0' + bytes(12))   # an empty PFS0: no ticket, the name's tag
         app, fam = nsp.scan_nsps(self.tmp)
         self.assertEqual((fam['base'], sorted(fam['updates'])), (self.xci, [(1769472, self.xci), (2228224, upd)]))
 
     def test_bundled_dlc(self):
         app, fam = nsp.scan_nsps(self.tmp)
         work = self.tmp / 'work'; logs = work / 'logs'; logs.mkdir(parents=True)
-        nsp_dlc = self.tmp / 'DLC [01006F8002327002][v0].nsp'; nsp_dlc.write_bytes(b'x'); fam['dlc'].append((APP + 0x1002, 0, nsp_dlc))
+        nsp_dlc = self.tmp / 'DLC [01006F8002327002][v0].nsp'; nsp_dlc.write_bytes(b'PFS0' + bytes(12)); fam['dlc'].append((APP + 0x1002, 0, nsp_dlc))
         self.assertEqual(nsp.extract_aoc(Path('nx'), Path('keys'), REPO, work, app, fam, logs), work / 'aoc')
         self.assertEqual(sorted(p.name for p in (work / 'aoc').iterdir()), ['1.img', '2.img', '3.img'])
         aoc = sorted((r for r in self.runs if r[0] == '--aoc'), key=lambda r: r[2])
