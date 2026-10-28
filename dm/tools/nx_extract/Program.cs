@@ -4,6 +4,7 @@
 // --manifest: the RomFS is not written, only a list <output dir>/romfs_manifest.tsv (path, size, first 32 bytes), for surveying a new game (a large game's RomFS is well over 10 GB).
 // A damaged NSP (a file whose data fails the NCA's hash check, e.g. a copy cut short or a broken download) stops the extraction with exit code 3 after listing every damaged file;
 //   --allow-damaged writes those files as read instead and only lists them (Super Mario Galaxy's base NSP with 147 MB zeroed: its two prologue WebM movies).
+// A sparse base program (Minecraft Dungeons II: its Program NCA leaves out data that its update carries) can be read only with its update: without one, exit code 4.
 // Add-on content: nx_extract <prod.keys> --aoc <DLC NSP> <output dir or image> [--romfs-image] [title ID] writes the RomFS of the DLC's data NCA to <output dir>, or with --romfs-image as one image (the packing script puts it at aoc/<index>.img, the host mounts it through DM_AOC_DIR).
 // A package may hold several titles (a merged XCI: Animal Crossing's holds the base game, update 2.0.5 and 3 DLC): each part is taken from the NCAs its content meta (cnmt) lists, the base game's
 //   from the Application meta, the update's from the Patch meta, a DLC's from the AddOnContent meta of that title ID. The same XCI may be given as base and update; without a Patch meta it is the base alone.
@@ -56,6 +57,10 @@ static class P {
             if (icon != null) { File.WriteAllBytes(Path.Combine(outDir, "icon.jpg"), icon); Console.WriteLine($"icon {lang} ({icon.Length} bytes)"); }
             else Console.WriteLine("no icon in the control data");
         }
+        if (updProg == null && Sparse(baseProg)) {   // Horizon mounts a sparse NCA only through its patch; alone, the left-out data fails the hash check
+            Console.WriteLine("[RED] the base game's program is sparse: it can be read only with its update NSP");
+            return 4;
+        }
         // Code section: the update's ExeFS is complete; opening it layered over the base gives the same result
         IFileSystem exefs = updProg != null ? baseProg.OpenFileSystemWithPatch(updProg, NcaSectionType.Code, IntegrityCheckLevel.ErrorOnInvalid) : baseProg.OpenFileSystem(NcaSectionType.Code, IntegrityCheckLevel.ErrorOnInvalid);
         Copy(exefs, Path.Combine(outDir, "ExeFS"), null);
@@ -81,6 +86,11 @@ static class P {
         else if (image) WriteImage(new RomFsFileSystem(romfs), Path.Combine(outDir, "RomFS.img"));
         else Copy(new RomFsFileSystem(romfs), Path.Combine(outDir, "RomFS"), cmpDir);
         return Damaged();
+    }
+
+    static bool Sparse(Nca n) {
+        for (int i = 0; i < 4; i++) if (n.Header.IsSectionEnabled(i) && n.Header.GetFsHeader(i).ExistsSparseLayer()) return true;
+        return false;
     }
 
     // Files whose data failed the hash check: listed at the end; exit code 3 unless --allow-damaged
