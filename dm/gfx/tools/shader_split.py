@@ -1561,36 +1561,51 @@ def trinity_shaders(path, rel, packs, out):
                 else: red(f'/{rel}#{name}: file {k} has compression {comp} ({sz} → {n} bytes), which is not known')
                 scan_blob(data, f'/{rel}#{name}#{struct.unpack_from("<Q", d, hs[0] + 8 * k)[0]:016x}', out)
 
-UE_LEGACY = 'UE legacy pak'
+UE_LEGACY, UE_BUNDLES = 'UE legacy pak', 'UE export bundles'
 def ue_legacy_jobs(files, parts=64):
     """Unreal paks whose shaders are inline in the cooked packages (uepak.inline_shaders): legacy paks (version 4, DRAGON QUEST XI S: pakchunk0-Switch.pak and pakchunk1-Switch.pak, 13.8 GB,
     and the update's *_0_P.pak) and version 11 paks without shader code archives (OCTOPATH TRAVELER II: Majesty-Switch.pak, 3.3 GB). The engine mounts them all as one view, and a patch pak
-    (name ending in _P.pak) wins over the others for the same path. Only the newest copy of each path is scanned. → ([(pak path, rel, (UE_LEGACY, names)), …] in about equal raw sizes, the pak paths taken)"""
+    (name ending in _P.pak) wins over the others for the same path. Only the newest copy of each path is scanned. The IoStore containers beside such a pak hold the cooked packages when the game
+    uses them (Tetris Effect: Connected, UE 4.26: 11,302 export bundles in TetrisEffect-Switch.utoc, its pak only the global shader cache and loose files): their export bundles are scanned too,
+    the newest copy of each chunk ID. An encrypted pak is read with main's key (uepak.main_key), which goes to the jobs in memory.
+    → ([(pak or TOC path, rel, (UE_LEGACY or UE_BUNDLES, names or chunk indices, key)), …] in about equal raw sizes, the pak and container paths taken)"""
     def inline(p):
         try: return uepak.inline_shaders(p)
         except (OSError, ValueError, struct.error): return False
     paks = [(p, r) for p, r in files if p.endswith('.pak') and inline(p)]
     if not paks: return [], set()
-    view = {}
+    view, keys = {}, {}
     for p, r in sorted(paks, key=lambda x: (x[1].endswith('_P.pak'), x[1])):   # patch paks last, so they replace; one view per pak folder (one per version given)
-        pk = uepak.Pak(p)
-        for name in pk.files: view[(os.path.dirname(p), os.path.normpath(pk.mount + name))] = (p, r, name, pk.entry(name)['raw'])
-    jobs, cur, size, step = [], collections.defaultdict(list), 0, sum(v[3] for v in view.values()) / parts
-    for p, r, name, raw in sorted(view.values(), key=lambda x: (x[1], x[2])):
-        cur[(p, r)].append(name); size += raw
-        if size >= step: jobs += [(p_, r_, (UE_LEGACY, tuple(ns))) for (p_, r_), ns in cur.items()]; cur, size = collections.defaultdict(list), 0
-    jobs += [(p_, r_, (UE_LEGACY, tuple(ns))) for (p_, r_), ns in cur.items()]
-    return jobs, {p for p, _ in paks}
+        with open(p, 'rb') as f: enc = uepak.footer(f)[0]
+        keys[p] = uepak.main_key(p) if enc else None; pk = uepak.Pak(p, keys[p])
+        for name in pk.files: view[(os.path.dirname(p), os.path.normpath(pk.mount + name))] = (p, r, UE_LEGACY, name, pk.entry(name)['raw'])
+    dirs = {os.path.dirname(p): k for p, k in keys.items()}
+    tocs = sorted(((p, r) for p, r in files if p.endswith('.utoc') and os.path.dirname(p) in dirs), key=lambda x: uepak.mount_order(x[0]))
+    for p, r in reversed(tocs):   # newest container first: a patch container's copy of a package wins
+        t = uepak.Toc(p, dirs[os.path.dirname(p)]); keys[p] = t.key
+        for i in t.bundles(): view.setdefault((os.path.dirname(p), t.ids[i]), (p, r, UE_BUNDLES, i, t.ranges[i][1]))
+    jobs, cur, size, step = [], collections.defaultdict(list), 0, sum(v[4] for v in view.values()) / parts
+    def flush(): return [(p_, r_, (kind, tuple(ns), keys[p_])) for (p_, r_, kind), ns in cur.items()]
+    for p, r, kind, name, raw in sorted(view.values(), key=lambda x: (x[1], x[2], str(x[3]))):
+        cur[(p, r, kind)].append(name); size += raw
+        if size >= step: jobs += flush(); cur, size = collections.defaultdict(list), 0
+    jobs += flush()
+    return jobs, {p for p, _ in paks} | {q for p, _ in tocs for q in (p, p[:-5] + '.ucas')}
 
 _PAKS = {}
-def ue_legacy_shaders(path, rel, names, out):
+def ue_legacy_shaders(path, rel, names, key, out):
     """Files of an Unreal pak with inline shaders (ue_legacy_jobs), each decoded block by block (Zlib and LZ4 in uepak.py; others with the game's own decoder, DRAGON QUEST XI S: LZ5) and scanned
     for the shader records the engine keeps inline"""
-    pk = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Pak(path))
+    pk = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Pak(path, key))
     for name in names:
         d = pk.read(name, decode=oodle)
         label = re.sub(r"^(\.\./)+", "", os.path.normpath(pk.mount + name))
         ue_inline_shaders(d, f'/{rel}#{label}', out)
+
+def ue_bundle_shaders(path, rel, chunks, key, out):
+    """Export bundles of an IoStore container beside an Unreal pak with inline shaders (ue_legacy_jobs), scanned as the pak's cooked packages are; each labelled by its chunk ID"""
+    t = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Toc(path, key))
+    for i in chunks: ue_inline_shaders(t.read(i, decode=oodle), f'/{rel}#{t.ids[i].hex()}', out)
 
 ZLIB_HEAD = re.compile(b'\x78[\x01\x5e\x9c\xda]')
 def ue_inline_shaders(d, label, out):
@@ -2146,7 +2161,10 @@ def scan_file_in(args):
         zip_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and args[2][0] == UE_LEGACY:   # files of a legacy Unreal pak (ue_legacy_jobs)
-        ue_legacy_shaders(path, rel, args[2][1], found)
+        ue_legacy_shaders(path, rel, args[2][1], args[2][2], found)
+        return rel, uniq_keys(found), var_pairs(found), trees
+    if len(args) > 2 and args[2][0] == UE_BUNDLES:   # export bundles of an IoStore container beside one (ue_legacy_jobs)
+        ue_bundle_shaders(path, rel, args[2][1], args[2][2], found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:4] == PKZL:   # entries of a PlatinumGames PKZ (pkz_jobs)
         pkz_shaders(path, rel, args[2], found)

@@ -10,7 +10,8 @@
 #   (FFRS-Switch.utoc / .ucas, Oodle in 64 KB blocks, not encrypted) as one ShaderCodeLibrary chunk each (the tables) and one ShaderCode chunk per group of shaders, every group Oodle-compressed
 #   on its own (Toc, io_archive). Both layers need the game's decoder, which runs in the Mac host's tool mode (OodleHost); the libraries come out as version 2 archives with every shader decoded.
 # The AES key is in main (Unreal embeds it): the 32-byte window of main's read-only or data segment that decrypts the index start to its mount point ("../../../"; Octopath Traveler 0: one window of
-#   116,287 tried). It is only kept in memory, never printed or written.
+#   116,287 tried), or, where the compiler split the constant into two 16-byte literals, the pair main's code loads and stores together (Tetris Effect: Connected, split_keys). It is only kept
+#   in memory, never printed or written.
 # Pak footer (version 11, the last 0xdd bytes): encryption key GUID (16), encrypted index flag (u8), magic 0x5A6F12E1, version (u32), index offset (u64), index size (u64), index SHA-1 (20),
 #   5 compression method names (32 bytes each).
 # Index: mount point (FString), entry count (i32), path hash seed (u64), path hash index (i32 flag, then u64 offset, u64 size, SHA-1), full directory index (the same, encrypted like the index),
@@ -28,6 +29,8 @@
 # Unreal Engine 4.27 with bShareMaterialShaderCode off (OCTOPATH TRAVELER II: Majesty/Content/Paks/Majesty-Switch.pak, version 11, 3.3 GB / 376,601 files, index not encrypted, Zlib blocks)
 #   has no shader code archive at all: each material keeps its shaders in its own cooked package (.uexp) and the engine's global shaders are in Engine/GlobalShaderCache-SF_GLSL_SWITCH.bin,
 #   every shader an LSLG record stored without compression, as in a legacy pak (inline_shaders; shader_split.py ue_legacy_jobs reads them). Zlib and LZ4 blocks are decoded here (Pak.read).
+# Unreal Engine 4.26 with that setting off and IoStore (Tetris Effect: Connected: TetrisEffect-Switch.pak, index encrypted, holds the global shader cache and loose files) keeps the cooked
+#   packages in the IoStore container beside the pak (TOC version 2, Zlib): shader_split.py reads their export bundles (Toc.bundles) as it reads the .uexp files of a pak.
 # Shader code archive (version 2): shader map hashes (20 bytes each), shader hashes (20 each), shader map entries {u32 first index, u32 shader count, u32 first preload, u32 preload count}, shader
 #   entries {u64 offset, u32 size, u32 raw size, u8 frequency} (17 bytes, packed), preload entries (16 each), shader indices (u32): each array is a u32 count and its elements; the code follows,
 #   offsets relative to its start. A shader whose size differs from its raw size is compressed.
@@ -35,7 +38,7 @@
 #        uepak.py job <RomFS> <main NSO> <work dir> [<Mac host> <rewritten modules>]   the shader code archives of every pak, and an Oodle job of their Oodle-compressed shaders (LZ4 ones
 #                                                                       decoded at once); IoStore shader libraries (UE 5.6) decoded at once through the game's Oodle in the host (OodleHost)
 #        uepak.py finish <work dir> <out dir>                           after the host has run the job: the archives with every shader decoded
-import ctypes, json, os, re, struct, sys
+import array, ctypes, json, os, re, struct, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../tools'))
 from romfs import os, open
 
@@ -171,18 +174,64 @@ def footer(f):
     methods = [ft[k + 44 + 32 * i:k + 76 + 32 * i].rstrip(b'\0').decode('latin1') for i in range(5)]
     return ft[k - 1], ioff, isz, methods, ver
 
+def _adrp(pc, x):
+    imm = (x >> 29 & 3) | (x >> 5 & 0x7ffff) << 2
+    return (pc & ~0xfff) + ((imm - (1 << 21) if imm & 1 << 20 else imm) << 12)
+
+def split_keys(img, lo):
+    """32-byte values main's code puts together from two 16-byte literals and stores to [x0]: each stp q, q, [x0] in the text whose two registers the eight instructions before it load
+    with adrp + ldr q (Tetris Effect: Connected: the callback Unreal's RegisterEncryptionKeyCallback takes, adrp, adrp, ldr q0, ldr q1, stp q0, q1, [x0], ret, the halves 0x1310 bytes apart)"""
+    w = array.array('I'); w.frombytes(img[:lo & ~3])
+    for m in re.finditer(rb'[\x00-\x1f][\x00-\x7c]\x00\xad', img[:lo & ~3]):   # stp qt, qt2, [x0]
+        i, x = m.start() // 4, w[m.start() // 4]
+        if m.start() % 4 or x & 0xffff83e0 != 0xad000000: continue
+        page, q = {}, {}
+        for j in range(max(0, i - 8), i):
+            y = w[j]
+            if y & 0x9f000000 == 0x90000000: page[y & 31] = _adrp(4 * j, y)
+            elif y & 0xffc00000 == 0x3dc00000 and y >> 5 & 31 in page: q[y & 31] = page[y >> 5 & 31] + (y >> 10 & 0xfff) * 16   # ldr qt, [xn, #imm]
+        a, b = x & 31, x >> 10 & 31
+        if a in q and b in q: yield img[q[a]:q[a] + 16] + img[q[b]:q[b] + 16]
+
+def opens(key, pak):
+    """Whether the key decrypts the pak's index start to a short mount point"""
+    with open(pak, 'rb') as f:
+        _, ioff, _, _, _ = footer(f); f.seek(ioff); d = aes_decrypt(key, f.read(16))
+    return 0 < struct.unpack_from('<i', d)[0] < 512 and d[4:7] == b'../'
+
 def find_key(img, lo, hi, pak):
-    """The AES key among main's 32-byte windows (read-only and data segments, 4-aligned, at least 20 distinct bytes): the one that decrypts the index start to a short mount point"""
+    """The AES key that opens the pak's index: among main's 32-byte windows (read-only and data segments, 4-aligned, at least 20 distinct bytes), then among the keys its code puts together
+    from two 16-byte literals (split_keys)"""
     with open(pak, 'rb') as f:
         _, ioff, _, _, _ = footer(f); f.seek(ioff); blk = f.read(16)
+    def ok(w):
+        d = aes_decrypt(w, blk)
+        return 0 < struct.unpack_from('<i', d)[0] < 512 and d[4:7] == b'../'
     for a in range(lo, hi - 32, 4):
         w = img[a:a + 32]
-        if len(set(w)) < 20: continue
-        d = aes_decrypt(w, blk)
-        if 0 < struct.unpack_from('<i', d)[0] < 512 and d[4:7] == b'../': return w
-    return None
+        if len(set(w)) >= 20 and ok(w): return w
+    return next((w for w in split_keys(img, lo) if ok(w)), None)
+
+_KEYS = {}
+def main_key(pak):
+    """The key of a pak with an encrypted index, from the main of the extraction it is in (<version dir>/RomFS[.img]/… beside <version dir>/ExeFS/main), searched once per main
+    and kept in memory only; None when no main is found or none of its windows opens the pak"""
+    d = os.path.dirname(os.path.abspath(pak))
+    while not os.path.isfile(os.path.join(d, 'ExeFS', 'main')):
+        if os.path.dirname(d) == d: return None
+        d = os.path.dirname(d)
+    m = os.path.join(d, 'ExeFS', 'main')
+    if m in _KEYS and _KEYS[m] and opens(_KEYS[m], pak): return _KEYS[m]
+    img, lo, hi = nso_image(m); _KEYS[m] = find_key(img, lo, hi, pak)
+    return _KEYS[m]
+
+def read_at(f, off, n, key=None):
+    """n bytes at off, AES-decrypted with the key when one is given (encrypted data is padded to 16 bytes)"""
+    f.seek(off); b = f.read((n + 15) & ~15 if key else n)
+    return aes_decrypt(key, b)[:n] if key else b
 
 class Pak:
+    """A pak's index and files; key = the AES key of an encrypted pak (main_key finds it)"""
     def __init__(self, path, key=None):
         self.path, self.key = path, key; self.f = open(path, 'rb')
         enc, ioff, isz, self.methods, self.version = footer(self.f)
@@ -210,8 +259,7 @@ class Pak:
             dn = d.fstr()
             for _ in range(d.take('<i')): fn = d.fstr(); self.files[(dn + fn).lstrip('/')] = d.take('<i')
     def read_at(self, off, n, enc):
-        self.f.seek(off); b = self.f.read((n + 15) & ~15 if enc else n)
-        return aes_decrypt(self.key, b)[:n] if enc else b
+        return read_at(self.f, off, n, self.key if enc else None)
     def entry(self, path):
         if self.version in LEGACY: return self.files[path]
         r = R(self.enc, self.files[path]); v = r.take('<I')
@@ -277,6 +325,7 @@ def lz4_shaders(b, a):
     return out
 
 TOC_MAGIC, IO_SHADER_LIBRARY, IO_SHADER_CODE = b'-==--==--==--==-', 8, 9   # EIoChunkType in Unreal Engine 5 (TOC version 4 and later; 4.27 numbers its chunk types otherwise)
+IO_EXPORT_BUNDLE, IO4_EXPORT_BUNDLE = 1, 2   # a package's exports: Unreal Engine 5's number, and 4.26 / 4.27's (TOC versions 2 and 3: Tetris Effect: Connected, version 2)
 
 class Toc:
     """An IoStore container: the .utoc's chunk table and compression blocks, the data in the .ucas beside it (<name>_s<n>.ucas for partitions after the first). A chunk is a range of the
@@ -307,6 +356,10 @@ class Toc:
     def of_type(self, t):
         """Indices of the chunks of one EIoChunkType (Unreal Engine 5 numbering: TOC version 4 and later)"""
         return [i for i, c in enumerate(self.ids) if c[11] == t] if self.version >= 4 else []
+    def bundles(self):
+        """Indices of the chunks that hold cooked packages (their export bundles), in either numbering"""
+        t = IO_EXPORT_BUNDLE if self.version >= 4 else IO4_EXPORT_BUNDLE
+        return [i for i, c in enumerate(self.ids) if c[11] == t]
     def ucas(self, part):
         if part not in self.files: self.files[part] = open(self.path[:-5] + ('.ucas' if not part else f'_s{part}.ucas'), 'rb')
         return self.files[part]
@@ -410,17 +463,19 @@ def paks(romfs):
 
 def inline_shaders(path):
     """Whether a pak keeps its shaders inline in its cooked packages rather than in shader code archives: every legacy pak (DRAGON QUEST XI S), and a version 11 pak whose directory index
-    names cooked packages (.uexp) and no .ushaderbytecode (OCTOPATH TRAVELER II: bShareMaterialShaderCode off). FINAL FANTASY RESONANCE's pak holds configs only (its shaders are in its IoStore
-    container) and Octopath Traveler 0's index is encrypted (reading it takes main's key; it holds the archives): neither counts"""
+    names no .ushaderbytecode but cooked packages (.uexp: OCTOPATH TRAVELER II, bShareMaterialShaderCode off) or the global shader cache (Engine/GlobalShaderCache-*.bin, which the cooker
+    writes only with that setting off: Tetris Effect: Connected keeps its packages in its IoStore container, Toc.bundles). FINAL FANTASY RESONANCE's pak holds configs only (its shaders are in its
+    IoStore container) and Octopath Traveler 0's holds the archives: neither counts. An encrypted index is read with main's key (main_key); without one the pak is taken for one with archives"""
     with open(path, 'rb') as f:
         enc, ioff, isz, _, ver = footer(f)
         if ver in LEGACY: return True
-        if enc: return False
-        f.seek(ioff); r = R(f.read(isz)); r.fstr(); r.take('<iQ')
+        key = main_key(path) if enc else None
+        if enc and not key: return False
+        r = R(read_at(f, ioff, isz, key)); r.fstr(); r.take('<iQ')
         if r.take('<i'): r.take('<QQ'); r.raw(20)
         if not r.take('<i'): return False
-        doff, dsz = r.take('<QQ'); f.seek(doff); d = f.read(dsz)
-    return b'.ushaderbytecode\0' not in d and b'.uexp\0' in d
+        doff, dsz = r.take('<QQ'); d = read_at(f, doff, dsz, key)
+    return b'.ushaderbytecode\0' not in d and (b'.uexp\0' in d or b'GlobalShaderCache-' in d)
 
 def unreal_paks(romfs, inline=None):
     """The paks under the RomFS that Unreal wrote (its magic in the footer; inline None = any, True = those whose shaders are inline in the cooked packages, False = the others, inline_shaders):
