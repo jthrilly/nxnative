@@ -103,3 +103,19 @@ class AddressRegions(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Aarch64(unittest.TestCase):
+    """aarch64: main.npdm's META flags, bit 0 the 64-bit instruction set (Mario Kart 8 Deluxe 1.0.0 is a 32-bit program)"""
+    def npdm(self, flags):
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        (d / 'main.npdm').write_bytes(b'META' + bytes(8) + bytes([flags]) + bytes(0x73))
+        return d / 'main.npdm'
+
+    def test_flags(self):
+        self.assertTrue(pg.aarch64(self.npdm(0x07)))   # AArch64, 39-bit address space
+        self.assertFalse(pg.aarch64(self.npdm(0x04)))  # AArch32, 32-bit address space without the reserved region (Mario Kart 8 Deluxe 1.0.0)
+
+    def test_without_npdm(self):
+        self.assertTrue(pg.aarch64(Path('/nonexistent/main.npdm')))

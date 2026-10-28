@@ -60,6 +60,7 @@ The game builds Mii heads from the console's MiiModel system data, starting at b
 
 ## Found on this game
 
+- **The base game 1.0.0 is a 32-bit program (resolved, the NSP script stops with an explanation):** v0 alone in the folder stopped the NSP script with `KeyError: 6`; it cannot run on Apple silicon, so the folder needs update 4.0.0 or later: [A 32-bit game version stops the build](../../../docs/reference/packing.md#a-32-bit-game-version-stops-the-build-with-keyerror-6-in-nso_symspy).
 - **Resolved in the sanitizer audit:** [Unaligned command headers during layout probing](../../../docs/reference/audio.md#unaligned-command-headers-during-layout-probing), reproduced with the SDK 4 command-list fixture.
 
 - **Audio layout detection after incomplete startup lists (resolved):** [Incomplete startup lists must not select the command layout](../../../docs/reference/audio.md#incomplete-startup-lists-must-not-select-the-command-layout).

@@ -614,6 +614,7 @@ def survey(nsp_dir, app, fam, keys, repo, py, env):
     say(f'extracting the code modules and a RomFS manifest (no game files written) → {ex}')
     run([nx, keys, fam['base'], upd or '-', tmp, '--manifest'] + (['--allow-damaged'] if ALLOW_DAMAGED else []), logs / 'extract.log')
     swap_in(tmp, ex)
+    check_aarch64(ex / 'ExeFS', f'{app:016X} ({"update v" + str(ups[-1][0]) if upd else "the base game"})')
     PROG.stage('survey: code modules', step='reading')
     xlog = (logs / 'extract.log').read_text(errors='replace')
     dv = re.search(r'display version (\S+)', xlog)
@@ -926,6 +927,13 @@ def extracted(log):   # (files, bytes) from the summary lines nx_extract wrote t
     try: rows = re.findall(r'[:|] (\d+) files ([\d.]+) MB', log.read_text(errors='replace'))
     except OSError: return None
     return (sum(int(n) for n, _ in rows), int(sum(float(mb) for _, mb in rows) * 2**20)) if rows else None
+
+
+def check_aarch64(exefs, what, later=''):
+    """A BuildError for a 32-bit (AArch32) program: the host runs the game's code on the CPU as it is, and Apple silicon runs only AArch64. Its modules' dynamic tables are 32-bit too,
+    which nothing after extraction reads (nso_syms.dynsyms read Mario Kart 8 Deluxe 1.0.0's as garbage and stopped with a KeyError)"""
+    if not pg.aarch64(exefs / 'main.npdm'):
+        raise BuildError(f'{what} is a 32-bit (AArch32) program (main.npdm), which cannot run on Apple silicon: only 64-bit (AArch64) code runs there. Put an update NSP with a 64-bit program in the folder{later}')
 
 
 def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):   # the build IDs are checked by the caller (build_mismatch)
@@ -2250,9 +2258,11 @@ def main(args=None):
     nx = build_nx_extract(repo, work, logs, env)
     PROG.end()
     dirs = {}
+    registered = f' (game profile {g.id} registers {", ".join(f"{v} {b['display']}" for v, b in builds.items())})' if builds else ''
     for ver in versions:   # each merged version streams directly into its own image
         b, u = picks[ver]
         dirs[ver] = extract(nx, keys, ex, ver, b, u, None, logs, g)
+        check_aarch64(dirs[ver] / 'ExeFS', f'{ver} ({nacp.version(dirs[ver] / "control.nacp") or "?"})', registered)
     bad = [] if derived else [f'{v}: {x}' for v in versions for x in build_mismatch(dirs[v], v, g)]   # every module's build ID must be the one the profile registers for its version
     if bad and provisional: raise BuildError(f'not the builds provisional game profile {g.id} registers: {"; ".join(bad)}')
     if bad:   # files of other builds under a registered version's tag: packed like any other version

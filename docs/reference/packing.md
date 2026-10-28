@@ -25,6 +25,15 @@
 - **Fix:** count uncompressed bytes as they are read and compare them with the listed size before completing either streamed method. A mismatch stops the pack and removes the partial archive, preserving the previous IPA and its reuse index. Regression tests cover growth and shrinkage with both deflate and store.
 - **Found on:** synthetic IPA inputs while reviewing [PR #279](https://github.com/seedds/nxnative/pull/279); no game files required.
 
+## Code modules
+
+### A 32-bit game version stops the build with `KeyError: 6` in `nso_syms.py`
+
+- **Symptom:** right after extraction (`derived game profile for v0 …`, or the survey's code modules) the NSP script stops with a traceback ending in `nso_syms.py` `dynsyms`: `symtab, strtab = tags[6], tags[5]`, `KeyError: 6`.
+- **Cause:** the version is a 32-bit (AArch32) program. Its `main.npdm` META flags (+0xc) have bit 0, the 64-bit instruction set, clear, and its modules' dynamic sections are `Elf32_Dyn` (8-byte entries), which `dynsyms` read as 16-byte `Elf64_Dyn` and found no `DT_SYMTAB`. The host runs the game's code on the CPU as it is, and Apple silicon has no AArch32, so such a version cannot run whatever the tools read from it.
+- **Fix:** `scripts/build_ipa_from_nsp.py` `check_aarch64` reads the flag (`dm/games/profile_guess.py` `aarch64`) after each extraction and after the survey's, and stops with a `BuildError` that names the version and asks for an update NSP with a 64-bit program, listing the versions the game profile registers. A folder with such an update packs it as before: the update's ExeFS replaces the base game's.
+- **Found on:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md), its base game 1.0.0 (v0) alone in the folder; its updates 4.0.0 and 4.0.1 are AArch64. The 11 other games of a local library are AArch64 in every version extracted.
+
 ## RomFS images
 
 ### RomFS folder transfers fail or leave stale game files
