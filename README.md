@@ -173,7 +173,12 @@ Under each game: the IPA's size, and "60 fps with 1.2.0" where the game runs at 
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/images/blasphemous.jpg" width="256" alt="Blasphemous"><br><a href="dm/games/0100698009C6E000/README.md">Blasphemous</a><br><sub>~0.9 GB</sub></td>
+<td align="center" valign="top" width="33%"><img src="docs/images/final-fantasy-x-x2-hd-remaster.jpg" width="256" alt="FINAL FANTASY X/X-2 HD Remaster"><br><a href="dm/games/0100BC300CB48000/README.md">FINAL FANTASY X/X-2 HD Remaster</a><br><sub>~26.5 GB</sub></td>
+<td align="center" valign="top" width="33%"><img src="docs/images/mario-rabbids-kingdom-battle.jpg" width="256" alt="Mario + Rabbids Kingdom Battle"><br><a href="dm/games/010067300059A000/README.md">Mario + Rabbids Kingdom Battle</a><br><sub>~5 GB</sub></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="33%"><img src="docs/images/pokemon-violet.jpg" width="256" alt="Pokémon Violet"><br><a href="dm/games/01008F6008C5E000/README.md">Pokémon Violet</a><br><sub>~10.3 GB</sub></td>
+<td></td>
 <td></td>
 </tr>
 </table>
