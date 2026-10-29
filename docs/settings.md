@@ -64,6 +64,10 @@ Shows the frames per second at the top left.
 
 A light tap from the phone when you press an on-screen button.
 
+### Controller buttons
+
+How an Xbox or PlayStation controller's A, B, X and Y buttons reach the game. **As labelled** (the default): the button marked A is the Switch's A, as the game's prompts show it, so confirm is the bottom button and back the right one. **As on a Switch**: the buttons keep the Switch's places, so the right button (Xbox B) is A and the bottom one (Xbox A) is B, as on a Switch controller. A Nintendo controller already has the Switch's labels in the Switch's places, so it works the same either way.
+
 ### Game rumble
 
 The game's vibration, on the phone or on a connected controller.
@@ -205,6 +209,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
 | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |
 | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
+| Controller buttons | `DM_FACE_BUTTONS` | `label`, `position` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |

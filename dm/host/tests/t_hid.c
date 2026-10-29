@@ -11,6 +11,7 @@ static int hid_usleep(useconds_t usec);
 #undef clock_gettime
 #undef usleep
 #include "../pad_slots.h"
+#include "../pad_layout.h"
 
 static int checks, fails, g_mode = 1, g_signals;
 static void *g_signalled;
@@ -70,6 +71,14 @@ static void t_slots(void) {
     CHECK(pad_slot_take(&s, &kbd, "keyboard") == 0 && pad_slot_take(&s, &a, "Xbox Wireless Controller") == 1, "with the keyboard on its own the first controller is player 2");
 }
 
+static void t_face_buttons(void) {
+    CHECK(pad_by_label(NULL, "Xbox One", "Xbox Wireless Controller"), "an Xbox controller follows its labels by default");
+    CHECK(pad_by_label("label", "DualSense", "DualSense Wireless Controller"), "a PlayStation controller follows its labels");
+    CHECK(!pad_by_label("position", "Xbox One", "Xbox Wireless Controller"), "position keeps the Switch's places");
+    CHECK(!pad_by_label(NULL, "Switch Pro Controller", "Pro Controller"), "a Pro Controller keeps its places");
+    CHECK(!pad_by_label("label", "Nintendo Switch Joy-Con (L/R)", "Joy-Con (L/R)"), "Joy-Cons keep their places");
+    CHECK(pad_by_label(NULL, NULL, NULL), "a controller without a name follows its labels");
+}
 static void t_npads(void) {
     // One player (the keyboard, or one controller): as before, everything is player 1 on No1 docked
     g_mode = 1; dm_pad_players(0);
@@ -368,7 +377,7 @@ static void t_motion_hid(void) {
 
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
-    t_slots();
+    t_slots(); t_face_buttons();
     t_npads();
     t_script();
     t_vibration();

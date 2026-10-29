@@ -14,6 +14,7 @@
 #include "front.h"
 #include "hle.h"
 #include "pad_slots.h"
+#include "pad_layout.h"
 #include "haptics_apple.h"
 #include "motion_apple.h"
 #include "motion_pro_mac.h"
@@ -118,6 +119,7 @@ static void on_key(NSEvent *e, int down) {
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
 static int g_merge, g_kbd_own;
+static const char *g_face;   // DM_FACE_BUTTONS (pad_layout.h)
 static int32_t pad_axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX); }
 static void pad_read(GCExtendedGamepad *g) {
     if (!g_input_on) return;
@@ -125,7 +127,8 @@ static void pad_read(GCExtendedGamepad *g) {
     dm_haptics_apple_controller(p, g.controller);
     uint64_t m = 0;
     #define K(btn, bit) if (btn.isPressed) m |= bit
-    K(g.buttonB, DM_BTN_A); K(g.buttonA, DM_BTN_B); K(g.buttonY, DM_BTN_X); K(g.buttonX, DM_BTN_Y);   // by position: right A, bottom B, top X, left Y
+    if (pad_by_label(g_face, g.controller.productCategory.UTF8String, g.controller.vendorName.UTF8String)) { K(g.buttonA, DM_BTN_A); K(g.buttonB, DM_BTN_B); K(g.buttonX, DM_BTN_X); K(g.buttonY, DM_BTN_Y); }
+    else { K(g.buttonB, DM_BTN_A); K(g.buttonA, DM_BTN_B); K(g.buttonY, DM_BTN_X); K(g.buttonX, DM_BTN_Y); }   // by position: right A, bottom B, top X, left Y
     K(g.leftShoulder, DM_BTN_L); K(g.rightShoulder, DM_BTN_R); K(g.leftTrigger, DM_BTN_ZL); K(g.rightTrigger, DM_BTN_ZR);
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
     K(g.dpad.left, DM_BTN_LEFT); K(g.dpad.up, DM_BTN_UP); K(g.dpad.right, DM_BTN_RIGHT); K(g.dpad.down, DM_BTN_DOWN);
@@ -200,6 +203,8 @@ static void input_resume(void) {
 static void pads_start(void) {
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     e = getenv("DM_KBD_PLAYER"); g_kbd_own = !g_merge && e && !strcmp(e, "own");
+    g_face = getenv("DM_FACE_BUTTONS");
+    LOG("front end: face buttons %s", g_face && !strcmp(g_face, "position") ? "by position on every controller (DM_FACE_BUTTONS=position)" : "by label on Xbox and PlayStation controllers, by position on Nintendo ones");
     static const char kbd = 0;
     if (g_kbd_own) pad_slot_take(&g_slots, &kbd, "keyboard");   // holds player 1 for good
     LOG("front end: %s", g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : g_kbd_own ? "the keyboard is player 1, each controller a player of its own from player 2 on (DM_KBD_PLAYER=own)"

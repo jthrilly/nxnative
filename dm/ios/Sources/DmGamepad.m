@@ -26,6 +26,7 @@
 #include "motion_apple.h"
 #include "motion_fusion.h"
 #include "pad_slots.h"
+#include "pad_layout.h"
 #include <stdatomic.h>
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
@@ -461,13 +462,15 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
 static int g_merge;
+static const char *g_face;   // DM_FACE_BUTTONS (pad_layout.h)
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
 static void read_pad(GCExtendedGamepad *g) {
     int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
     dm_haptics_apple_controller(p, g.controller);
     uint64_t m = 0;
     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
-    K(g.buttonB, B_A); K(g.buttonA, B_B); K(g.buttonY, B_X); K(g.buttonX, B_Y);   // by position: right A, bottom B, top X, left Y
+    if (pad_by_label(g_face, g.controller.productCategory.UTF8String, g.controller.vendorName.UTF8String)) { K(g.buttonA, B_A); K(g.buttonB, B_B); K(g.buttonX, B_X); K(g.buttonY, B_Y); }
+    else { K(g.buttonB, B_A); K(g.buttonA, B_B); K(g.buttonY, B_X); K(g.buttonX, B_Y); }   // by position: right A, bottom B, top X, left Y
     K(g.leftShoulder, B_L); K(g.rightShoulder, B_R); K(g.leftTrigger, B_ZL); K(g.rightTrigger, B_ZR);
     K(g.buttonMenu, B_PLUS); if (g.buttonOptions) K(g.buttonOptions, B_MINUS);
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
@@ -481,6 +484,8 @@ static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?:
 static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
 static void pads_start(void) {
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
+    g_face = getenv("DM_FACE_BUTTONS");
+    LOG("front end: face buttons %s", g_face && !strcmp(g_face, "position") ? "by position on every controller (DM_FACE_BUTTONS=position)" : "by label on Xbox and PlayStation controllers, by position on Nintendo ones");
     LOG("front end: %s", g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : "each controller is a player of its own, the touch gamepad plays with player 1");
 }
 // Called at start and on every connect / disconnect (gone: the controller that was just removed, nil otherwise); returns whether a controller is in use
