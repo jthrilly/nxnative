@@ -435,6 +435,13 @@ Games read this count as a position in their own command memory and size their h
 - **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), reported in MacNativeGames commit `a166602` and ported through [PR #197](https://github.com/seedds/nxnative/pull/197). The missing-letter symptom has not been reproduced in nxnative; the tracker failures are reproduced locally by the regression tests.
 - **Check:** `t_dirty_race` covers the BUSY-page retry, stamp ordering, and a check between clock allocation and generation publication in both unprotect paths. The publication cases fail on main; the batched case also fails with the original PR applied.
 
+### Xcode's debugger stops on the tracker's write fault
+
+- **Symptom:** a game run from a prepared Xcode project stops in Xcode with `EXC_BAD_ACCESS (code=2)` on a game thread, at a plain store into guest memory; `memory region` on the address shows an `r--` page that is dirty, and the app's `Documents/log.txt` shows the game running normally up to then.
+- **Cause:** the dirty-page tracker (`nvn_dirty.c`) write-protects pages of GPU memory and takes the SIGSEGV of the first write to them. lldb receives the Mach exception before the process's handler and stops, so the handled fault looks like a crash.
+- **Fix:** the prepared project's scheme runs without the debugger (`debugEnabled: false` in `dm/ios/project.yml`). To debug in Xcode, tick Debug executable in the scheme's Run → Info and let SIGSEGV pass ([05-debugging.md](../agents/05-debugging.md)).
+- **Found on:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md) 4.0.1 on an iPhone 17: a sead list insert (`str x1, [x8, #8]` at `main+0x5faf9c`) into a protected page.
+
 ## NVN entry points
 
 ### Integer sampler border colours
