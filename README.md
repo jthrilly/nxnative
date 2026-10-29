@@ -220,9 +220,9 @@ Under each game: the IPA's size, and "60 fps with 1.2.0" where the game runs at 
 <td align="center" valign="top" width="33%"><img src="docs/images/paper-mario-the-origami-king.jpg" width="256" alt="Paper Mario: The Origami King"><br><sub><b><a href="dm/games/0100A3900C3E2000/README.md">Paper Mario: The Origami King</a></b></sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="33%"><img src="docs/images/batman-arkham-knight.jpg" width="256" alt="Batman: Arkham Knight"><br><sub><b><a href="dm/games/0100ACD0163D0000/README.md">Batman: Arkham Knight</a></b></sub></td>
+<td align="center" valign="top" width="33%"><img src="docs/images/bastion.jpg" width="256" alt="Bastion"><br><sub><b><a href="dm/games/010038600B27E000/README.md">Bastion</a></b><br>~0.9 GB</sub></td>
 <td align="center" valign="top" width="33%"><img src="docs/images/pokemon-violet.jpg" width="256" alt="Pokémon Violet"><br><sub><b><a href="dm/games/01008F6008C5E000/README.md">Pokémon Violet</a></b><br>~10.3 GB</sub></td>
-<td></td>
-<td></td>
 </tr>
 </table>
 <!-- end of gallery -->
