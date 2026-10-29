@@ -86,6 +86,7 @@ schemes:
         DmIOS: all
     run:
       config: Release
+      debugEnabled: false   # the host takes SIGSEGV for dirty-page tracking, so an attached debugger stops on the first tracked write as if it were a crash
     profile:
       config: Release
     archive:
