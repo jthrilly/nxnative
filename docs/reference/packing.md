@@ -80,6 +80,13 @@
 - **Fix:** `scripts/build_ipa_from_nsp.py` `scan_nsps` takes a file only when its header is one nx_extract opens (`is_package`: `PFS0` at 0, or an XCI's `HEAD` at 0x100), and says which files it skips. The name tag alone no longer counts, so the same check also rejects any other tagged file that is not a package. Names that start with `._` are skipped without a line. The script's `rmtree` passes ENOENT from `shutil.rmtree` (the entry is gone, which is the goal) and raises every other error. `dm/tools/tests/test_nsp_external_drive.py` and `test_nsp_scan.py` cover both without game files.
 - **Found on:** the NX2Apple fork's users, who keep games on external drives ([PR #476](https://github.com/seedds/nxnative/pull/476), part of [issue #388](https://github.com/seedds/nxnative/issues/388)); reproduced on an exFAT disk image made with `hdiutil create -fs ExFAT`. Applies to every game.
 
+### The c1 guard stops on an AppleDouble file after the shader build
+
+- **Symptom:** with the build folder on an exFAT or FAT drive, the shader step compiles every library and then stops in `c1_guard.py` with `UnicodeDecodeError: 'utf-8' codec can't decode byte …` (dmsh_build.py: `[RED] c1_guard.py failed`), reading a `._<key>_b.metal`.
+- **Cause:** the same AppleDouble files as above, beside the shader build's outputs. `c1_guard.py` took every name ending in `.metal` for a shader's MSL and read the binary `._` file as text. `cb_extent.py` (every `_b.json`) skipped it only because it ignores what it cannot parse, and `dmsh_mtlcache.py` (every `_b.metal`) took `._<key>_b` for a shader, found no readable reflection for it and so filled the Metal cache from none of that folder's libraries.
+- **Fix:** the three take only the names the shader build writes, `<16 hex key>_b….metal` / `.json` as `dmsh_build.py` (`OUT_KEY`) and `regress.py` already did: `c1_guard.py` `outputs` (which `cb_extent.py` uses too) and `dmsh_mtlcache.py` `OUTPUT`. None of them is part of the chain version. `dm/tools/tests/test_nsp_chain.py` runs both table tools on a folder with `._` files; the old `c1_guard.py` stops on it. On 13 Sentinels' 751 shaders both tables are unchanged.
+- **Found on:** a user's iOS shader build on an external drive ([PR #555](https://github.com/seedds/nxnative/pull/555)). Applies to every NVN game.
+
 ## Compressed inputs
 
 ### NSZ decompression rejects `--keys`
