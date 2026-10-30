@@ -66,13 +66,8 @@ def payoff(gap):   # the Gaps order: open gaps, then blocked, kept and unreviewe
     return group, -max(1, len(ids)), RANK.get(e['goal'], 0) - RANK[e['now']], e['what'].casefold()
 
 
-UE_DRIVE = 'the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29)'
 # The host's build-keyed rows: (table, the start of the row's label ('' = any), main build ('' = any), entry); the first that fits classifies a row
 HOST_BINDING = [
-    ('k_locks', 'Unreal', '', {'what': 'Unreal frame console variables written at fixed addresses', 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
-     'checked': 'dm_ue_cvar run on the five mains, 2026-10-29',
-     'why': f'`dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on {UE_DRIVE}; nvn.SyncInterval (DRAGON QUEST XI S) '
-            'and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile\'s'}),
     ('k_locks', 'Unity', '', {'what': "Unity's Application.targetFrameRate at a fixed address", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
      'why': 'an IL2CPP player registers the setter by its icall name, so the field can be found in any Unity game; whether to raise it stays the profile\'s'}),
     ('k_locks', 'RE Engine', '', {'what': "RE Engine's frame limit at a fixed pointer", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
@@ -129,6 +124,7 @@ SWITCH_BINDING = [
     ('present_interval', '', {'what': 'one frame per display tick', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'right only for games whose logic does not count frames'}),
     ('fps_hold', '', {'what': 'no frame held past the cap', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's pacing"}),
     ('fps_target', '', {'what': 'frame rate target', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'a choice per game'}),
+    ('ue_fps_cvar', '', {'what': "the game's own Unreal frame-limit variable", 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's own variable, which its settings apply to t.MaxFPS; the rewriter finds it by name (ue_cvar.py)"}),
     ('perf_mode', '', {'what': 'Boost whatever the operation mode', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'a combination a Switch 1 never reports: a choice per game'}),
     ('op_mode', '', {'what': 'the operation mode at start', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the game's controls (handheld: the touch screen instead of a gyro pointer)"}),
 ]

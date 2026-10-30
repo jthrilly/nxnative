@@ -31,9 +31,11 @@ app_pool	0xCD500000
 sys_resource	0x2800000
 
 # The Switch profile caps Project.FrameRateLimit at 30 and rhi.syncinterval at 2.
-# hle_fpslock.c raises the verified 1.0.3 console variables; Unreal applies the
-# project limit through GameUserSettings to t.MaxFPS. DM_FPS_TARGET=30 restores 30.
+# hle_fpslock.c raises both console variables, found by name by the rewriter
+# (ue_cvar.py); Unreal applies the project limit through GameUserSettings to
+# t.MaxFPS, so ue_fps_cvar names it instead of t.MaxFPS. DM_FPS_TARGET=30 restores 30.
 fps_target	60
+ue_fps_cvar	Project.FrameRateLimit
 
 # ---- Input ----
 pad_layout	full
