@@ -68,9 +68,9 @@ def variant(msl):
         params = fetch + f', constant dm_logic_state& dm_lop [[buffer({dmsh_abi.LOGIC_BUFFER})]]'
         apply = ' '.join(f'if (dm_lfb{n}) dm_r.{nm} = {ty}(dm_logic(uint4(dm_r.{nm}{pad}), dm_fb{n}, dm_lop, {n}u){sw});'
                          for nm, n in ints
-                         for ty in [re.search(r'^\s*(uint[234]?)\s+%s\s*\[\[' % nm, st.group(1), re.M).group(1)]
+                         for ty in [re.search(r'^\s*(uint[234]?)\s+%s\s*\[\[' % nm, st.group(1), re.M).group(1)]   # pyright: ignore[reportOptionalMemberAccess]  # the field findall just found
                          for pad, sw in [{'uint': (', 0u, 0u, 0u', '.x'), 'uint2': (', 0u, 0u', '.xy'), 'uint3': (', 0u', '.xyz'), 'uint4': ('', '')}[ty]])
-        body, n = re.subn(r'\breturn\s+([^;]+);', lambda r: '{ ' + struct + ' dm_r = ' + r.group(1) + '; ' + apply + ' return dm_r; }', msl[body_start:body_end])
+        body, n = re.subn(r'\breturn\s+([^;]+);', lambda r: '{ ' + struct + ' dm_r = ' + r.group(1) + '; ' + apply + ' return dm_r; }', msl[body_start:body_end])   # noqa: B023  # subn calls it in this iteration
         if not n: return None, f'no return in {name}'
         pieces += [msl[at:params_end - 1], params, msl[params_end - 1:body_start], body]; at = body_end
         names.append(name); targets.update(n for _, n in ints)
@@ -84,4 +84,4 @@ def variant(msl):
         src = src[:m.start()] + src[body_end:].lstrip('\n')
     first = re.search(r'^(?:\[\[[^\]]*\]\]\s*)?(?:fragment|vertex|kernel)\s+\w+\s+\w+\s*\(', src, re.M)   # the helper before the first entry point (SPIRV-Cross writes helper functions before them)
     consts = ''.join(f'constant bool dm_lfb{n} [[function_constant({dmsh_abi.LOGIC_FC + n})]];\n' for n in sorted(targets))
-    return src[:first.start()] + HELPER + consts + src[first.start():], names
+    return src[:first.start()] + HELPER + consts + src[first.start():], names   # pyright: ignore[reportOptionalMemberAccess]  # the entry points in names are left

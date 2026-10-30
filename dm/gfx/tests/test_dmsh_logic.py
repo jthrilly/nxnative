@@ -4,7 +4,8 @@ test's shaders (t_logic.m): the base source and its logic operation library, com
 import pathlib, shutil, subprocess, sys, tempfile, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 import dmsh_abi, dmsh_logic
-from test_dmsh_alpha import compile_lib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # its sibling test module, also when the file runs alone (python -m unittest <file>, as CI does)
+from test_dmsh_alpha import compile_lib   # noqa: E402
 
 BASE = '''#include <metal_stdlib>
 using namespace metal;
