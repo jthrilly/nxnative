@@ -27,7 +27,6 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 |---|---|---|---|---|---|---|---|
 | `game` → `host` | CPU-written textures uploaded after a flush | rendering | gap | judgement | 10 | `tex_flush_upload`: [FINAL FANTASY TACTICS - The Ivalice Chronicles](../../dm/games/010038B015560000/README.md), [Ghost Trick: Phantom Detective](../../dm/games/010029B018432000/README.md), [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md), [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md), [NieR:Automata The End of YoRHa Edition (010056B015FE8000)](../../dm/games/010056B015FE8000/README.md), [NieR:Automata The End of YoRHa Edition (0100B8E016F76000)](../../dm/games/0100B8E016F76000/README.md), [OCTOPATH TRAVELER](../../dm/games/010057D006492000/README.md), [The Great Ace Attorney Chronicles](../../dm/games/010036E00FB20000/README.md), [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), [Yoshi's Crafted World](../../dm/games/01006000040C2000/README.md) | unified memory semantics; off by default because a flushed range could cover an image a shader writes: tracking GPU writes would make it safe for every game |
 | `game` → `host` | CPU-written textures uploaded without a flush | rendering | gap | judgement | 9 | `tex_dirty_upload`: [FINAL FANTASY TACTICS - The Ivalice Chronicles](../../dm/games/010038B015560000/README.md), [Ghost Trick: Phantom Detective](../../dm/games/010029B018432000/README.md), [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md), [NieR:Automata The End of YoRHa Edition (010056B015FE8000)](../../dm/games/010056B015FE8000/README.md), [NieR:Automata The End of YoRHa Edition (0100B8E016F76000)](../../dm/games/0100B8E016F76000/README.md), [OCTOPATH TRAVELER](../../dm/games/010057D006492000/README.md), [The Great Ace Attorney Chronicles](../../dm/games/010036E00FB20000/README.md), [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), [Yoshi's Crafted World](../../dm/games/01006000040C2000/README.md) | as tex_flush_upload, for pools the CPU writes without a flush |
-| `build` → `engine` | FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c) | address space | gap | checked: the discovery run on this main, 2026-10-29 | 7 | [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md); [FINAL FANTASY RESONANCE](../../dm/games/0100606026F12000/README.md); [FINAL FANTASY RESONANCE (Asian release)](../../dm/games/0100B8A026F14000/README.md); [OCTOPATH TRAVELER 0](../../dm/games/01005270232F2000/README.md); [OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md); [Pikmin 4](../../dm/games/0100B7C00933A000/README.md); [SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md) | found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call |
 | `build` → `engine` | Unreal frame console variables written at fixed addresses | frame rate | gap | checked: dm_ue_cvar run on the five mains, 2026-10-29 | 7 | [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md); [DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition](../../dm/games/01006C300E9F0000/README.md); [FINAL FANTASY RESONANCE](../../dm/games/0100606026F12000/README.md); [FINAL FANTASY RESONANCE (Asian release)](../../dm/games/0100B8A026F14000/README.md); [OCTOPATH TRAVELER 0](../../dm/games/01005270232F2000/README.md); [OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md); [SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md) | `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's |
 | `game` → `engine` | Unreal's engine region size | address space | gap | judgement | 7 | `game_args`: [DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition](../../dm/games/01006C300E9F0000/README.md), [FINAL FANTASY RESONANCE](../../dm/games/0100606026F12000/README.md), [FINAL FANTASY RESONANCE (Asian release)](../../dm/games/0100B8A026F14000/README.md); `game_args`: [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md), [OCTOPATH TRAVELER 0](../../dm/games/01005270232F2000/README.md), [OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md), [SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md) | the NSP script's address region check could set it for every Unreal game with virtual address memory |
 | `game` → `host` | StandardAllocator blocks of 64 KB and more aligned to 64 KB | memory | gap | judgement | 5 | `alloc_big_align`: [13 Sentinels: Aegis Rim](../../dm/games/01003FC01670C000/README.md), [13 Sentinels: Aegis Rim (Asia)](../../dm/games/01008D7016438000/README.md), [13 Sentinels: Aegis Rim (Japan)](../../dm/games/010045C014650000/README.md), [Unicorn Overlord](../../dm/games/010069401ADB8000/README.md), [Unicorn Overlord (Asia)](../../dm/games/010054B01AD92000/README.md) | the cause is a memory pool's GPU address, big-page aligned on hardware and the CPU address here: pool GPU addresses aligned as hardware does, or this alignment for every game |
@@ -80,12 +79,12 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [ASTRAL CHAIN](#astral-chain) | 0 | 0 | 112 | 0 | 0 | `build` → `game` |
 | [Batman: Arkham Knight](#batman-arkham-knight) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
 | [DARK SOULS: REMASTERED](#dark-souls-remastered) | 2 | 0 | 0 | 0 | 0 | `build` → `game` |
-| [DRAGON QUEST VII Reimagined](#dragon-quest-vii-reimagined) | 1 | 1 | 0 | 0 | 3 | `build` → `engine` ×2 |
+| [DRAGON QUEST VII Reimagined](#dragon-quest-vii-reimagined) | 0 | 0 | 0 | 0 | 2 | `build` → `engine` |
 | [DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition](#dragon-quest-xi-s-echoes-of-an-elusive-age--definitive-edition) | 0 | 0 | 0 | 0 | 2 | `build` → `engine` |
 | [EA SPORTS FC 27](#ea-sports-fc-27) | 0 | 0 | 0 | 0 | 1 | `build` → `engine` |
 | [FINAL FANTASY CRYSTAL CHRONICLES Remastered Edition](#final-fantasy-crystal-chronicles-remastered-edition) | 8 | 0 | 0 | 0 | 0 | `build` → `engine` |
-| [FINAL FANTASY RESONANCE](#final-fantasy-resonance) | 1 | 0 | 0 | 0 | 3 | `build` → `engine` ×2 |
-| [FINAL FANTASY RESONANCE (Asian release)](#final-fantasy-resonance-asian-release) | 1 | 0 | 0 | 0 | 2 | `build` → `engine` ×2 |
+| [FINAL FANTASY RESONANCE](#final-fantasy-resonance) | 0 | 0 | 0 | 0 | 2 | `build` → `engine` |
+| [FINAL FANTASY RESONANCE (Asian release)](#final-fantasy-resonance-asian-release) | 0 | 0 | 0 | 0 | 1 | `build` → `engine` |
 | [FINAL FANTASY TACTICS - The Ivalice Chronicles](#final-fantasy-tactics---the-ivalice-chronicles) | 2 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Fire Emblem Engage](#fire-emblem-engage) | 1 | 0 | 0 | 0 | 0 | `build` → `engine` |
 | [Fire Emblem: Three Houses](#fire-emblem-three-houses) | 12 | 0 | 0 | 0 | 0 | `build` → `game`, `build` → `host` |
@@ -97,13 +96,13 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Need For Speed™ Hot Pursuit Remastered](#need-for-speed-hot-pursuit-remastered) | 1 | 0 | 0 | 0 | 5 | `build` → `game`, `build` → `engine` |
 | [NieR:Automata The End of YoRHa Edition (010056B015FE8000)](#nierautomata-the-end-of-yorha-edition-010056b015fe8000) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
 | [NieR:Automata The End of YoRHa Edition (0100B8E016F76000)](#nierautomata-the-end-of-yorha-edition-0100b8e016f76000) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
-| [OCTOPATH TRAVELER 0](#octopath-traveler-0) | 1 | 0 | 0 | 0 | 3 | `build` → `engine` ×2 |
-| [OCTOPATH TRAVELER II](#octopath-traveler-ii) | 1 | 1 | 0 | 0 | 3 | `build` → `engine` ×2 |
+| [OCTOPATH TRAVELER 0](#octopath-traveler-0) | 0 | 0 | 0 | 0 | 2 | `build` → `engine` |
+| [OCTOPATH TRAVELER II](#octopath-traveler-ii) | 0 | 0 | 0 | 0 | 2 | `build` → `engine` |
 | [Paper Mario: The Thousand-Year Door](#paper-mario-the-thousand-year-door) | 1 | 0 | 1 | 0 | 0 | `build` → `game` |
-| [Pikmin 4](#pikmin-4) | 3 | 1 | 0 | 0 | 1 | `build` → `engine` ×2 |
+| [Pikmin 4](#pikmin-4) | 2 | 0 | 0 | 0 | 0 | `build` → `engine` |
 | [Pokémon Brilliant Diamond](#pokémon-brilliant-diamond) | 0 | 0 | 0 | 0 | 1 | `build` → `engine` |
 | [Pokémon Violet](#pokémon-violet) | 1 | 0 | 0 | 0 | 0 | `build` → `host` |
-| [SHIN MEGAMI TENSEI V: Vengeance](#shin-megami-tensei-v-vengeance) | 1 | 1 | 0 | 0 | 3 | `build` → `engine` ×2 |
+| [SHIN MEGAMI TENSEI V: Vengeance](#shin-megami-tensei-v-vengeance) | 0 | 0 | 0 | 0 | 2 | `build` → `engine` |
 | [Subnautica](#subnautica) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Subnautica: Below Zero](#subnautica-below-zero) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | `game` |
@@ -256,7 +255,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - cut `+0xc5ab8c`: queue pop: ldr x8, [x19] → dmb ishld (after the tail load; w8 = head)
   - cut `+0xc5ab94`: queue pop: ldr w9, [x19, #0x1c] (the head again) → and x9, x8, #0xffff
   - cut `+0xc5ab98`: queue pop: and x9, x9, #0xffff → ldr x8, [x19] (the ring; then ldr x8, [x8, x9, lsl #3]: the item)
-  - host [hle_uemalloc.c:57](../../dm/host/hle_uemalloc.c#L57): Unreal's allocator on a host malloc zone
+  - host [hle_uemalloc.c:41](../../dm/host/hle_uemalloc.c#L41): Unreal's allocator on a host malloc zone
 
 ### DARK SOULS: REMASTERED
 
@@ -270,17 +269,13 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 ### DRAGON QUEST VII Reimagined
 
-[DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md), `0100A9D01C446000`, [patches.py](../../dm/games/0100A9D01C446000/patches.py).
+[DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md), `0100A9D01C446000`.
 
-- **`build` → `engine`**, address space, gap, checked: the discovery run on this main, 2026-10-29: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call
 - **`build` → `engine`**, frame rate, gap, checked: dm_ue_cvar run on the five mains, 2026-10-29: Unreal frame console variables written at fixed addresses. `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's
 
-- **1.2.0 `main`** `f7ec03e4…` ([patches.py:9](../../dm/games/0100A9D01C446000/patches.py#L9))
-  - cut `+0x32758dc`: GCreateMalloc: bl 0x291714 (FMallocBinned3 constructor, 37 GB of address space) → nop; the host allocator's vtable is put in at the gate after it (hle_uemalloc.c)
-  - gate 21 at `+0x32758e4`: GCreateMalloc: the allocator object is in x19, before it is used: the host puts its vtable in; orig mov x0, x19
+- **1.2.0 `main`** `f7ec03e4…`
   - host [hle_fpslock.c:43](../../dm/host/hle_fpslock.c#L43): engine frame limit set to fps_target: Unreal t.MaxFPS
   - host [hle_fpslock.c:44](../../dm/host/hle_fpslock.c#L44): engine frame limit set to fps_target: Unreal rhi.SyncInterval
-  - host [hle_uemalloc.c:42](../../dm/host/hle_uemalloc.c#L42): Unreal's allocator on a host malloc zone
 
 ### DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition
 
@@ -319,28 +314,22 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 ### FINAL FANTASY RESONANCE
 
-[FINAL FANTASY RESONANCE](../../dm/games/0100606026F12000/README.md), `0100606026F12000`, [patches.py](../../dm/games/0100606026F12000/patches.py).
+[FINAL FANTASY RESONANCE](../../dm/games/0100606026F12000/README.md), `0100606026F12000`.
 
-- **`build` → `engine`**, address space, gap, checked: the discovery run on this main, 2026-10-29: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call
 - **`build` → `engine`**, frame rate, gap, checked: dm_ue_cvar run on the five mains, 2026-10-29: Unreal frame console variables written at fixed addresses. `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's
 
-- **1.0.1 `main`** `84e182f7…` ([patches.py:9](../../dm/games/0100606026F12000/patches.py#L9))
-  - cut `+0x137f0`: nninitStartup: bl 0xae770 (FMallocBinned3 constructor, 38 GB of address space) → nop; the host allocator is in the object already (hle_uemalloc.c)
+- **1.0.1 `main`** `84e182f7…`
   - host [hle_fpslock.c:47](../../dm/host/hle_fpslock.c#L47): engine frame limit set to fps_target: Unreal t.MaxFPS
   - host [hle_fpslock.c:48](../../dm/host/hle_fpslock.c#L48): engine frame limit set to fps_target: Unreal rhi.SyncInterval
-  - host [hle_uemalloc.c:53](../../dm/host/hle_uemalloc.c#L53): Unreal's allocator on a host malloc zone
 
 ### FINAL FANTASY RESONANCE (Asian release)
 
-[FINAL FANTASY RESONANCE (Asian release)](../../dm/games/0100B8A026F14000/README.md), `0100B8A026F14000`, [patches.py](../../dm/games/0100B8A026F14000/patches.py).
+[FINAL FANTASY RESONANCE (Asian release)](../../dm/games/0100B8A026F14000/README.md), `0100B8A026F14000`.
 
-- **`build` → `engine`**, address space, gap, judgement: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call; this release is not on the drive (the JP release is)
 - **`build` → `engine`**, frame rate, gap, checked: dm_ue_cvar run on the five mains, 2026-10-29: Unreal frame console variables written at fixed addresses. `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's
 
-- **1.0.1 `main`** `b7f965b9…` ([patches.py:7](../../dm/games/0100B8A026F14000/patches.py#L7))
-  - cut `+0x137f0`: nninitStartup: bl 0xae770 (FMallocBinned3 constructor, 38 GB of address space) → nop; the host allocator is in the object already (hle_uemalloc.c)
+- **1.0.1 `main`** `b7f965b9…`
   - host [hle_fpslock.c:50](../../dm/host/hle_fpslock.c#L50): engine frame limit set to fps_target: Unreal rhi.SyncInterval
-  - host [hle_uemalloc.c:55](../../dm/host/hle_uemalloc.c#L55): Unreal's allocator on a host malloc zone
 
 ### FINAL FANTASY TACTICS - The Ivalice Chronicles
 
@@ -496,30 +485,23 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 ### OCTOPATH TRAVELER 0
 
-[OCTOPATH TRAVELER 0](../../dm/games/01005270232F2000/README.md), `01005270232F2000`, [patches.py](../../dm/games/01005270232F2000/patches.py).
+[OCTOPATH TRAVELER 0](../../dm/games/01005270232F2000/README.md), `01005270232F2000`.
 
-- **`build` → `engine`**, address space, gap, checked: the discovery run on this main, 2026-10-29: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call
 - **`build` → `engine`**, frame rate, gap, checked: dm_ue_cvar run on the five mains, 2026-10-29: Unreal frame console variables written at fixed addresses. `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's
 
-- **1.0.5 `main`** `9fe60a21…` ([patches.py:9](../../dm/games/01005270232F2000/patches.py#L9))
-  - cut `+0x12e40`: nninitStartup: bl 0x9f480 (FMallocBinned3 constructor, 37 GB of address space) → nop; the host allocator is in the object already (hle_uemalloc.c)
+- **1.0.5 `main`** `9fe60a21…`
   - host [hle_fpslock.c:33](../../dm/host/hle_fpslock.c#L33): engine frame limit set to fps_target: Unreal t.MaxFPS
   - host [hle_fpslock.c:34](../../dm/host/hle_fpslock.c#L34): engine frame limit set to fps_target: Unreal rhi.SyncInterval
-  - host [hle_uemalloc.c:40](../../dm/host/hle_uemalloc.c#L40): Unreal's allocator on a host malloc zone
 
 ### OCTOPATH TRAVELER II
 
-[OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md), `0100A3501946E000`, [patches.py](../../dm/games/0100A3501946E000/patches.py).
+[OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md), `0100A3501946E000`.
 
-- **`build` → `engine`**, address space, gap, checked: the discovery run on this main, 2026-10-29: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call
 - **`build` → `engine`**, frame rate, gap, checked: dm_ue_cvar run on the five mains, 2026-10-29: Unreal frame console variables written at fixed addresses. `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's
 
-- **1.1.1 `main`** `0d964901…` ([patches.py:9](../../dm/games/0100A3501946E000/patches.py#L9))
-  - cut `+0xbecc08`: GCreateMalloc: bl 0xc4d778 (FMallocBinned3 constructor) → nop; the host allocator's vtable is put in at the gate after it (hle_uemalloc.c)
-  - gate 21 at `+0xbecc0c`: GCreateMalloc: the allocator object is in x19, before it is used: the host puts its vtable in; orig mov x0, x19
+- **1.1.1 `main`** `0d964901…`
   - host [hle_fpslock.c:54](../../dm/host/hle_fpslock.c#L54): engine frame limit set to fps_target: Unreal t.MaxFPS
   - host [hle_fpslock.c:55](../../dm/host/hle_fpslock.c#L55): engine frame limit set to fps_target: Unreal rhi.SyncInterval
-  - host [hle_uemalloc.c:48](../../dm/host/hle_uemalloc.c#L48): Unreal's allocator on a host malloc zone
 
 ### Paper Mario: The Thousand-Year Door
 
@@ -535,15 +517,11 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 [Pikmin 4](../../dm/games/0100B7C00933A000/README.md), `0100B7C00933A000`, [patches.py](../../dm/games/0100B7C00933A000/patches.py).
 
-- **`build` → `engine`**, address space, gap, checked: the discovery run on this main, 2026-10-29: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call
 - **`build` → `engine`**, address space, blocked: open: whether that argument path is the game's own or a host fault, judgement: engine region 62 GB → 4064 MB. The other Unreal games cap the region with -SwitchVirtualAddressSpaceSize= (game_args); this build reserves it only without the argument, and with it the base stayed 0 and the first commit failed
 
-- **1.1.1 `main`** `060f827b…` ([patches.py:11](../../dm/games/0100B7C00933A000/patches.py#L11))
+- **1.1.1 `main`** `060f827b…` ([patches.py:8](../../dm/games/0100B7C00933A000/patches.py#L8))
   - cut `+0x353f56c`: nninitStartup: the engine region's default size orr x8,xzr,#0xf80000000 (62 GB) → mov x8,#0xfe000000 (4064 MB)
   - cut `+0x353f578`: nninitStartup: AllocateAddressRegion size orr x1,xzr,#0xf80000000 (62 GB) → mov x1,#0xfe000000 (4064 MB)
-  - cut `+0x353f788`: GCreateMalloc: bl 0x35ba610 (FMallocBinned3 constructor) → nop; the host allocator's vtable is put in at the gate after it (hle_uemalloc.c)
-  - gate 21 at `+0x353f78c`: GCreateMalloc: the allocator object is in x19, before it is used: the host puts its vtable in; orig ldp x29, x30, [sp, #0x10]
-  - host [hle_uemalloc.c:45](../../dm/host/hle_uemalloc.c#L45): Unreal's allocator on a host malloc zone
 
 ### Pokémon Brilliant Diamond
 
@@ -565,17 +543,13 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 ### SHIN MEGAMI TENSEI V: Vengeance
 
-[SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md), `010069C01AB82000`, [patches.py](../../dm/games/010069C01AB82000/patches.py).
+[SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md), `010069C01AB82000`.
 
-- **`build` → `engine`**, address space, gap, judgement: FMallocBinned3 constructor call cut, with the gate that puts the host allocator in (hle_uemalloc.c). Found without a build ID on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29): the "Binned3" name, its getter, the one vtable holding it, the layout from the getter's slot, the one function other than slots 0 and 1 that stores the vtable (the constructor) and its one call site, whose x0 is the object. A rewriter rule must apply RELA relocations and gate at the call; this game is not on the drive
 - **`build` → `engine`**, frame rate, gap, checked: dm_ue_cvar run on the five mains, 2026-10-29: Unreal frame console variables written at fixed addresses. `dm_ue_cvar` (hle_uecvar.c) finds t.MaxFPS and rhi.SyncInterval by their registered names at exactly these addresses on the five Unreal games on the game drive (OCTOPATH TRAVELER 0 and II, DRAGON QUEST VII Reimagined, Pikmin 4, FINAL FANTASY RESONANCE; checked 2026-10-29); nvn.SyncInterval (DRAGON QUEST XI S) and Project.FrameRateLimit (SHIN MEGAMI TENSEI V: Vengeance) have no game files on the drive. Which variable to write stays the profile's
 
-- **1.0.3 `main`** `0a4f14a5…` ([patches.py:9](../../dm/games/010069C01AB82000/patches.py#L9))
-  - cut `+0x1f2f63c`: GCreateMalloc: bl FMallocBinned3 constructor -> nop; host malloc zone installed at OBS_UE_MALLOC
-  - gate 21 at `+0x1f2f644`: GCreateMalloc: x19 is the allocator object; install the host vtable before use; orig mov x0, x19
+- **1.0.3 `main`** `0a4f14a5…`
   - host [hle_fpslock.c:59](../../dm/host/hle_fpslock.c#L59): engine frame limit set to fps_target: Unreal Project.FrameRateLimit
   - host [hle_fpslock.c:60](../../dm/host/hle_fpslock.c#L60): engine frame limit set to fps_target: Unreal rhi.SyncInterval
-  - host [hle_uemalloc.c:51](../../dm/host/hle_uemalloc.c#L51): Unreal's allocator on a host malloc zone
 
 ### Subnautica
 
