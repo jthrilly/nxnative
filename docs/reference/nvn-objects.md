@@ -449,6 +449,14 @@ Games read this count as a position in their own command memory and size their h
 - **Fix:** the prepared project's scheme runs without the debugger (`debugEnabled: false` in `dm/ios/project.yml`). To debug in Xcode, tick Debug executable in the scheme's Run → Info and let SIGSEGV pass ([05-debugging.md](../agents/05-debugging.md)).
 - **Found on:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md) 4.0.1 on an iPhone 17: a sead list insert (`str x1, [x8, #8]` at `main+0x5faf9c`) into a protected page.
 
+### A retired pool remains read-only
+
+- **Symptom:** a host system call writing into storage after its NVN pool was finalized fails with `EFAULT`; a direct write can fault after the tracker stopped owning the page.
+- **Cause:** `nvn_dirty_protect` found a live range without holding the slot mutex. Pool retirement could restore its pages to writable and mark the range dead before protect changed the page state to BUSY. Protect then set the retired storage read-only, with no live range left to release it. In the same window a new pool could reuse the slot, and protect would then compute its pages from the new pool's base and state array.
+- **Fix:** hold the pool-slot mutex across protect's lookup, page-state transitions and final `mprotect`. Pool creation and retirement already hold that mutex. The page-fault and host pre-write paths still take no slot mutex, so they can finish a BUSY transition while protect waits.
+- **Found on:** code review of the shared tracker, from a fork's compatibility commit `587d5206` ported through [PR #686](https://github.com/seedds/nxnative/pull/686). No game is known to hit it: a game normally finalizes a pool only after the GPU is done with it.
+- **Check:** `t_dirty_retire_race` retires the pool between protect's lookup and its first page-state exchange, then reads 16 bytes into the pool with `read()`. Without the fix, retirement completes first and the read fails with `EFAULT`; with it, retirement waits for protection, unregisters the pool and the read returns 16. `t_dirty_race` and `t_dirty_slots` cover page-state publication and shared / reused pool slots.
+
 ## NVN entry points
 
 ### Integer sampler border colours
