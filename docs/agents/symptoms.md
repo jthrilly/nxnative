@@ -62,6 +62,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - SIGILL / trap on a system register read. → [System register reads that macOS traps](../reference/rewriter.md#system-register-reads-that-macos-traps)
 - every pointer in `.data` / the GOT is a module offset, crashes everywhere. → [Packed relative relocations (DT_RELR)](../reference/rewriter.md#packed-relative-relocations-dt_relr)
 - `regress.py check` stops before gameplay with `CUTS of build ... in both ...`, naming a revision profile and its copied harness profile. → [Regression rewrites register copied profiles twice](../reference/rewriter.md#regression-rewrites-register-copied-profiles-twice)
+- packing spends most of the rewrite step on the x18 scan and the spin-wait search, using one core per module. Cancelling a parallel rewrite can leave its workers running; `DM_REWRITE_J=0` or a negative value can silently omit spin gates, and the NSP script can ignore an explicit worker limit. → [Parallel scans preserve rewrite output](../reference/rewriter.md#parallel-scans-preserve-rewrite-output)
 
 ## Memory and address space
 
@@ -659,6 +660,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - hundreds of geometry raster passes in combat, despite support for batching consecutive geometry draws. → [Geometry runs across occlusion query boundaries](../reference/shaders.md#geometry-runs-across-occlusion-query-boundaries)
 - geometry preparation dominates rendering CPU even after geometry passes have been batched; primitive assembly and capture-index deduplication repeat for unchanged meshes. → [Prepared geometry indices reused after byte comparison](../reference/shaders.md#prepared-geometry-indices-reused-after-byte-comparison)
 - geometry vertex-capture passes consume substantial GPU time before geometry compute or depth rasterization. → [Geometry capture initializes only missing words](../reference/shaders.md#geometry-capture-initializes-only-missing-words)
+- Apple's performance HUD (`DM_METAL_HUD=1`) says `Compiled 2 shaders. Total compilation time is 102.70ms. Consider adopting MTL4Compiler for more fine grained compilations` during play, with a dip in the frame-rate graph at that moment, for example when a new room first issues a scissored clear. → [The host's own shaders compiled from source at run time](../reference/shaders.md#the-hosts-own-shaders-compiled-from-source-at-run-time)
 
 ## Game state
 
