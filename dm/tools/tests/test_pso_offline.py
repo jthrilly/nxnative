@@ -194,6 +194,14 @@ class Build(unittest.TestCase):
         (self.prof / 'game.tsv').write_text('title_id\t0100000000001000\nname\tTest\ndepth_mode\tnear0\n')
         with self.assertRaises(SystemExit): self.main('--script-only')
 
+    def test_echoes_archive_matches_observed_depth(self):
+        # Issue #758: the game's NVN calls select near=0. Exercise the real profile through the archive builder,
+        # with the small synthetic pair list, so an omitted key cannot quietly build main0 instead of main0_z.
+        self.main('--game', '01008CF01BAAC000', '--pairs', str(self.prof / 'shader_pairs.tsv'), '--script-only')
+        self.assertIn('depth\tnear=0\n', (self.out / 'prebuilt.tsv').read_text())
+        script = json.loads(next(self.work.glob('*.mtl4-json')).read_text())
+        self.assertEqual(script['pipeline_descriptors']['render_pipeline_descriptors'][0]['vertex_function_descriptor'], 'fnd:v_bp.main0_z')
+
     def test_library_content_invalidates_archive(self):
         self.main()
         for name in ('v_bp', 'f_b'):
