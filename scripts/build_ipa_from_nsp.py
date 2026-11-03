@@ -917,9 +917,10 @@ def derive_profile(g, pdir, ver, d, mods, app=None, shader_only=False):
     src = sorted(p for p in g.dir.iterdir() if p.is_file() and (p.name not in DERIVED_SKIP or shader_only and p.name == 'patches.py'))
     T, disp = '\t', nacp.version(d / 'control.nacp') or '?'
     row = T.join(['build', ver, disp] + [f'{m}={build_id(d / "ExeFS" / m)}' for m in mods if (d / 'ExeFS' / m).exists()])
-    out, put = [f'# Derived from game profile {g.dir} by scripts/build_ipa_from_nsp.py for {ver} ({disp}), a version that profile was not brought up on:',
+    # the header names the profile by its ID, not its folder: the text is part of the derived key, so the same profile in another checkout keeps the derived folder and the split
+    out, put = [f'# Derived from game profile {g.id} by scripts/build_ipa_from_nsp.py for {ver} ({disp}), a version that profile was not brought up on:',
                 '# its keys as they are, this version\'s build row, and shader tables made from this version\'s own files'], False
-    if shader_only: out = [f'# Derived shader tables from game profile {g.dir}; registered module builds and settings are preserved.']
+    if shader_only: out = [f'# Derived shader tables from game profile {g.id}; registered module builds and settings are preserved.']
     ids = {}
     if app is not None and app != g.title_id:   # the host reports the program ID and answers save data queries for it (hle_svc.c, hle_fs.c)
         ids = {'title_id': f'title_id{T}{app:016X}', 'program_id': f'program_id{T}{(pg.npdm(d / "ExeFS/main.npdm")[1] or app):016X}'}
@@ -930,6 +931,10 @@ def derive_profile(g, pdir, ver, d, mods, app=None, shader_only=False):
         if not own_step and line.split(T, 1)[0] == 'fps_target' and line.partition(T)[2].strip() != '0':
             out += ['# the profile has frame step stubs for other builds only: this version\'s main has none, so it keeps the game\'s own step', f'fps_target{T}0']; continue
         if line.split(T, 1)[0] in ids: out.append(ids[line.split(T, 1)[0]]); continue
+        if not shader_only and line.split(T, 1)[0] == 'modules' and (d / 'ExeFS').is_dir():
+            want = line.partition(T)[2].split(); have = [m for m in want if (d / 'ExeFS' / m).exists()]
+            if have != want:   # a module this version does not ship (Mario Kart World 1.0.0 has no subsdk1, the C library module of 1.8.0): left in, the rewrite stopped on the missing file
+                out += [f'# this version ships no {" ".join(m for m in want if m not in have)}', f'modules{T}{" ".join(have)}']; continue
         if not shader_only and line.split(T, 1)[0] in ('build', 'package', 'shader_versions'):
             if not put: out += [row, f'package{T}{ver}', f'shader_versions{T}{ver}']; put = True
             continue

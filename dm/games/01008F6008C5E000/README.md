@@ -11,7 +11,7 @@ Update 4.0.0 (v786432) over the base game, SDK 13.3.13. Game Freak's Trinity eng
 | Regions of 1 GB and more aligned to 32 MB instead of 1 GB | `dm/tools/sdk_patches.py`, `sdk+0x37c95c` | at 1 GB alignment the 4 GB region did not fit behind the node area; see [Memory](#memory) |
 | 5 GB guest layout: `mem_reserve 0x140000000`, `mem_alias 0x118000000`, `mem_stack 0x10000000`, `app_pool 0xCD500000`, `sys_resource 0x1000000` | [`game.tsv`](game.tsv) | the guesser's layout for a game with a 16 MB system resource (virtual address memory) that never sets a heap; the 4.375 GB alias region holds 62 MB + 4 GB |
 | `mem_map_limit on` | `game.tsv` | as Pokémon Legends: Z-A: `nninitStartup` allocates and frees all it can, and the SDK keeps those pages mapped until a map fails (one map of 512 KB refused at 3.15 GB in the first minute; in play the alias region holds 0.6 to 2.3 GB) |
-| Bluetooth LE answered without a Bluetooth service | `dm/host/hle_bluetooth.c` (general) | the game initializes BLE for its Pokémon GO link in `nnMain` and aborts without the `bt` service; see [Services](#services) |
+| Bluetooth LE answered without a Bluetooth service | `dm/host/hle_offline.c` (general) | the game initializes BLE for its Pokémon GO link in `nnMain` and aborts without the `bt` service; see [Services](#services) |
 | `depth_mode zero` | `game.tsv` | the game sets the near = 0 depth mode at start (`nvnDeviceSetDepthMode`), which the pipeline bases made before it runs (the Mac prebuild, the iPhone's offline archive) have to know |
 | `pad_layout full` | `game.tsv` | the camera is on the right stick |
 
@@ -22,7 +22,7 @@ Update 4.0.0 (v786432) over the base game, SDK 13.3.13. Game Freak's Trinity eng
 
 ## Services
 
-- **Resolved: abort in `nn::bluetooth::InitializeBluetoothUserInterface` early in `nnMain`**, after `[RED] sf: the game connects to service bt itself`: the game initializes Bluetooth LE for its Pokémon GO link (`main+0xa0aa7c`: `InitializeBle` at `+0xa0b02c`, then the five `AcquireBle…Event` calls, no result checked), and with the initialization answered, `btm::user::AcquireBleScanEvent` aborted next. The host answers them without Bluetooth: [Bluetooth LE events bound without a Bluetooth service](../../../docs/reference/services.md#bluetooth-le-events-bound-without-a-bluetooth-service). The other 30 `nn::bluetooth` imports (scan, connect, GATT) stay unhooked; they are reached from the GO link's menu only.
+- **Resolved: abort in `nn::bluetooth::InitializeBluetoothUserInterface` early in `nnMain`**, after `[RED] sf: the game connects to service bt itself`: the game initializes Bluetooth LE for its Pokémon GO link (`main+0xa0aa7c`: `InitializeBle` at `+0xa0b02c`, then the five `AcquireBle…Event` calls, no result checked), and with the initialization answered, `btm::user::AcquireBleScanEvent` aborted next. The host answers them without Bluetooth: [Bluetooth LE at boot](../../../docs/reference/services.md#bluetooth-le-at-boot). The other 30 `nn::bluetooth` imports (scan, connect, GATT) stay unhooked; they are reached from the GO link's menu only.
 - The game's own HIPC client is not used for anything else: no other `sf:` line.
 
 ## Rendering
@@ -41,7 +41,7 @@ Update 4.0.0 (v786432) over the base game, SDK 13.3.13. Game Freak's Trinity eng
 
 General host changes first needed here; each applies to every game:
 
-- **Bluetooth LE answered without a Bluetooth service** (`hle_bluetooth.c`): [Bluetooth LE events bound without a Bluetooth service](../../../docs/reference/services.md#bluetooth-le-events-bound-without-a-bluetooth-service).
+- **Bluetooth LE answered without a Bluetooth service** (`hle_offline.c`): [Bluetooth LE at boot](../../../docs/reference/services.md#bluetooth-le-at-boot).
 - **`nvnCommandBufferSetConservativeRasterDilate` as a quiet stub** (`hle_nvn.c`): [NVN calls that were red stubs](../../../docs/reference/nvn-objects.md#nvn-calls-that-were-red-stubs).
 
 Per-build cuts on this game's SDK 13.3.13 build (`sdk_patches.py`): [The SDK's address-region node area](../../../docs/reference/memory.md#the-sdks-address-region-node-area), [1 GB alignment of regions of 1 GB and more](../../../docs/reference/memory.md#1-gb-alignment-of-regions-of-1-gb-and-more).
