@@ -423,6 +423,13 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Reader:** `uepak.py` `inline_shaders` tells such a pak from one with archives by its directory index (cooked packages and no `.ushaderbytecode`; an encrypted index is taken for one with archives), and `shader_split.py` `ue_legacy_jobs` reads it file by file, Zlib and LZ4 blocks decoded in Python (`Pak.read`), so no host runs. `ue_inline_shaders` finds each LZ4 block by its first literals, the record's `LSLG`, with the token and literal length bytes in front of it, and takes it when it decodes to exactly the raw size after the block.
 - **Found on:** [OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md): 13,980 unique shaders (1,910 vertex, 11,346 pixel, 694 compute, 30 geometry) from the 3.3 GB pak in 13 s.
 
+### Unreal Engine 4.22 to 4.25 paks (version 8)
+
+- **Symptom:** `[RED] the shader split found no shaders in main or the RomFS`; the survey counts the game's Unreal paks, but no `UE shader decode` step runs and the split reads none of them.
+- **Cause:** the paks are version 8, which `uepak.py` did not read (only 4 and 11): `footer` raised, and `unreal_paks` skipped both paks as no Unreal paks. Version 8 keeps version 4's per-file index, but its footer is version 11's (key GUID, encrypted flag, magic 0xcc from the end, five 32-byte compression method names after the SHA-1), and an FPakEntry's compression method is an index (from 1) into those names instead of version 4's flags.
+- **Fix:** `uepak.py` reads version 8 as a legacy pak: its footer as version 11's, its index as version 4's, each file's method named from the footer (`Zlib`, decoded in Python by `Pak.read`). The shaders are inline in the cooked packages and `Engine/GlobalShaderCache-GLSL_SWITCH.bin`, as in [Unreal Engine 4.18](#unreal-engine-418-shaders-inline-in-cooked-packages), so `shader_split.py` `ue_legacy_jobs` reads them unchanged. `dm/tools/tests/test_uepak_v8.py` builds a version 8 pak with a Zlib file and a stored one.
+- **Found on:** DRAGON BALL Z: KAKAROT + A NEW POWER AWAKENS SET (`010051C0134F8000`, 1.00, SDK 9.3.1): 43,113 shaders from 3,776 files in 38 s; it plays from the title through the opening fight.
+
 ### Unreal Engine 3 shader caches (Oodle packages)
 
 - **Symptom:** `the shader split found no shaders in main or the RomFS`; the survey lists the RomFS as cooked packages (`.xxx`) and `.usm` movies only.
@@ -818,7 +825,7 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Fix:**
   - `dmsh_mesh.compose` gives each mesh entry a run twin (`dm_mesh_run`, `dm_mesh_run_z`, `..._p16`). It takes a table at the draw slot (buffer 12) of `dm_mesh_rec`: each draw's arguments, the running total of its threadgroups and the addresses bound at the vertex table's slots for it. A threadgroup finds its draw by halving, takes the vertex set, the pulling layout and the kernel's arguments through those addresses, and runs the same body with the draw's own threadgroup and primitive numbers. A pair whose vertex resources are not all constant references gets no twin.
   - The host (`nvn_geometry.inc`, `geo_mesh_take`) lets a mesh draw that fits wait instead of dispatching: its record copies `g_vt_addr`, the shadow of the vertex table the mesh stage shares, after its arguments are bound. The run is one dispatch of the twin, drawn before any operation other than bindings, a program bind and draws (`geo_mesh_keeps`, from `mtl_exec`), before a draw of another pair, pass or kind (`geo_mesh_draw`, `draw_`), and before its pass ends (`rp_end`, `defer_fallback`). Bindings only change the replay state and dirty flags, so nothing else reaches the encoder between the draws of a run.
-  - The GPU may rasterize the threadgroups of one dispatch in any order, so a run takes only draws whose result does not depend on their order: no colour writes to an attached target, no stencil writes, depth written only with a test that keeps the nearest or the farthest (NEVER, LESS, LEQUAL, GREATER, GEQUAL), no occlusion query counting, and a fragment shader with no resources, since the fragment table is not in the record. The kernel's storage writes are unordered between separate mesh draws of a pass already (NVN orders them only with a barrier, which ends the run).
+  - The GPU may rasterize the threadgroups of one dispatch in any order, so a run takes only draws whose result does not depend on their order: no colour writes to an attached target, no stencil writes, depth written only with a test that keeps the nearest or the farthest (NEVER, LESS, LEQUAL, GREATER, GEQUAL), and a fragment shader with no resources, since the fragment table is not in the record. Occlusion query counting may be on: a report ends the run and a pass keeps one query slot, so each query's interval holds whole runs, and whether any of its samples passed is the same in any order (the nearest fragment of each pixel passes); only the exact count can differ. The first version refused runs while counting was on, and counting stays on for the rest of the game after the first samples-passed reset: in Donkey Kong Bananza no draw ever joined a run (the log's `0 of them in 0 runs`). A refused draw's reason is logged once (`geometry mesh run: a draw of vertex … draws alone`). The kernel's storage writes are unordered between separate mesh draws of a pass already (NVN orders them only with a barrier, which ends the run).
   - The twin's pipeline is built in the background like the pair's own; until it is ready, and when it fails, the draws are single. `DM_NVN_GEO_MESH_RUN=0` turns runs off. The `geometry mesh draws` line of the log counts the draws drawn in runs, the runs, and what ended them.
 - **Check:**
   - `test_dmsh_geometry.py` checks the twins' text (the table, the halving, the resources from the record, the same body in all four entries) and that a non-constant vertex resource leaves the twin out. With `DMSH_TEST_XLATE` and `DMSH_TEST_GPU=1`, `mesh_primitive_id.m` also draws 97 translated triangles as four draws (31, 1, 33, 32) in one run dispatch for both depth modes and all three index types, each draw numbering its own primitives.
@@ -1233,6 +1240,20 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
   - [Catherine: Full Body](../../dm/games/0100BF00112C0000/README.md) (SDK 8.2.1): its two built-in programs are captured on the Mac the same way; they compile only once the host reports the GLSLC's GPU code version ([next entry](#glslc-gpu-code-version-against-the-drivers-range)).
   - [The Legend of Zelda: Link's Awakening](../../dm/games/01006BB00C6F0000/README.md): `subsdk0` is NVN's runtime GLSL compiler and `main` imports `glslcCompile*`, but up to the house, the beach and the menus every shader the game loaded was in the offline tables.
   - [Captain Toad: Treasure Tracker](../../dm/games/01009BF0072D4000/README.md) (the rule that a module must define `glslcCompile`): `main` imports `glslcCompile` and holds agl's GLSL sources, but no module defines it, so nothing is compiled at run time.
+
+### A run-time compile that waits for a button press
+
+- **Symptom:** the NSP script stops with `captured only 0 run-time shaders` while the capture run reaches the game's frame loop and runs to the end of its 30 s.
+- **Cause:** the game compiles its run-time programs only after its title screen has had a button press, and the capture run had no input: 0 outputs in 200 s without a press, both of them 3 s after the first A.
+- **Fix:** the capture run presses A every 4 s from 5 s on (`GLSLC_KEYS` in `build_ipa_from_nsp.py`, through `DM_KEYS`). The run keeps its own save and temporary storage, so whatever the presses choose is thrown away with them; a game that compiles at boot (Three Houses) is done before the first press.
+- **Found on:** Crash Team Racing Nitro-Fueled (`0100F9F00C696000`, update 1.0.15, no profile yet): both outputs within the 30 s run.
+
+### Offline coverage after an empty GLSLC capture
+
+- **Symptom:** The Mac capture boot submits shader programs but writes no GLSLC capture files.
+- **Cause:** The source/import heuristic finds a compiler that the game can call. A cache hit lets the game submit a precompiled output without calling it.
+- **Fix:** If the profile requires no capture files, use an empty shader map for the capture boot to observe submitted shader keys. An empty capture can continue only after the offline split supplies every observed key. A stopped host, failed capture, missing key or no observations fails the check. This verifies coverage of the observed boot.
+- **Found on:** Alien: Isolation (SDK 8.2.0).
 
 ### GLSLC GPU code version against the driver's range
 
