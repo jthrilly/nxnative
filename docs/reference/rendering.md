@@ -438,6 +438,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** such clears are drawn as one triangle over the pass in the open render encoder (`clear_color_tri` / `clear_ds_tri` in `nvn_mtl.m`, adapted from MacNativeGames, MIT). The pipeline has the pass's formats, the clear's mask as the write mask of its slot and no writes to the other slots. Depth is `ALWAYS` (and written for a depth clear), stencil `REPLACE` through the clear's write mask, the scissor is clamped as for draws, and visibility counting is off for the triangle. The value comes from the frame arena through the triangle's own argument tables, and the draws' tables are put back after it. A clear outside a pass opens the pass as a draw would. Clears a load action can express keep it. Two cases are still cleared whole, logged once: a depth / stencil clear with a scissor outside a pass, and a partial stencil write mask.
 - **Found on:** [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md): it issues the first whole-cleared case (a depth clear scissored to 8×8 of a 64×64 target), and so does Wonder ([Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md)). With `render_cond` ([Conditional rendering evaluated at replay](#conditional-rendering-evaluated-at-replay)) TOTK's scissored colour clears are all skipped; without it they are 50×50 tiles of a 500×400 target cleared to opaque black, about five a frame. [Metroid Dread](../../dm/games/010093801237C000/README.md) logged the red line once while loading on its smoke route.
 
+### A depth clear over the whole target with a partial stencil mask
+
+- **Symptom:** a pass loads a whole depth/stencil target every frame only to clear it: Donkey Kong Bananza clears a 2880x1620 Depth32F-S8 target with stencil mask `0x1`, before any pass is open, and loads 22.8 MB a frame for it.
+- **Cause:** any stencil mask other than 0 or 0xff takes `clear_ds_tri`, for depth too, and the triangle's pass loads both planes.
+- **Fix:** with no pass open and a depth clear that covers the whole target, the depth half is the next pass's load action (`OP_CLEAR_DS` in `nvn_mtl.m`), and only the stencil is drawn. A clear that is partial in either sense, or made with a pass open, keeps the triangle for both.
+- **Check:** `t_clear_ds`: the depth and stencil planes after a masked stencil clear with a full depth clear, outside and inside a pass.
+- **Found on:** [Donkey Kong Bananza](../../dm/games/040074A01BF12000/README.md) ([issue #1138](https://github.com/seedds/nxnative/issues/1138)): on an M2 MacBook Air the pass went from 346 to 284 µs of GPU time and its load from 22.8 MB to 4.6 MB a frame.
+
 ### Depth16 load-clears match fragment writes
 
 - **Symptom:** a tile grid in Ultrahand and Recall highlights; an `EQUAL` depth test rejects fragments writing the same depth as a cleared Depth16 target.
@@ -1235,6 +1243,13 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Cause:** Portal's `main` is SDL with its EGL video backend; it imports 20 EGL functions and names `glShaderSource` twice (SDL's GL renderer), but imports no NVN and draws nothing. The renderer is in the Source engine NROs: `materialsystem.nro` (with the D3D9 layer linked in) and `video_nx.nro` import `nvnBootstrapLoader` and draw with NVN.
 - **Fix:** `profile_guess.py` `shader_sources` now reads the imports of the loose NROs in the RomFS (`romfs_nro_imports`): when one imports `nvnBootstrapLoader`, the game is an NVN game whatever `main` imports. Digimon keeps the GL rule: it has no NRO. The survey, which has only a RomFS manifest, called Portal 2 an OpenGL game and left GLSLC out of its modules until `nx_extract --manifest` also wrote the RomFS's NROs (`romfs_nro/`, 60 MB for Portal 2's 21) for it to read the same way.
 - **Found on:** [Portal](../../dm/games/01007BB017812000/README.md); [Portal 2](../../dm/games/0100ABD01785C000/README.md) (the survey).
+
+### NVN and its own GLSLC under a main that also links EGL
+
+- **Symptom:** the NSP script took the game for an OpenGL one (`main imports EGL and names glShaderSource`) and translated 2 GL shaders; the game boots with sound and answers input, but the window stays black, and the log has `[nvn-mtl] [RED] shader … is not in the shader map` for every shader it makes, with no EGL call at all.
+- **Cause:** the engine links both paths. `main` imports 14 EGL functions and names `glShaderSource`, but also imports `nvnBootstrapLoader` and 8 GLSLC functions (`glslcCompile` among them, defined in `subsdk2`), holds 4 GLSL sources, and keeps the rest in its RomFS `.shader` files (RIFF `SHDR`, a `gl43` chunk with `#version 450` GLSL). On the Mac it draws with NVN and compiles every shader at run time with GLSLC; taken for OpenGL, it got no GLSLC capture.
+- **Fix:** `profile_guess.py` `shader_sources`: a `main` that imports `nvnBootstrapLoader` and `glslcCompile`, holds GLSL sources, and loads a module that defines `glslcCompile` is an NVN game whatever else it links, and gets the GLSLC capture as Three Houses does. Digimon keeps the GL rule (no GLSLC compile of its own); of 16 games extracted here (Super Mario Odyssey, Super Smash Bros. Ultimate, Metroid Dread, Hollow Knight: Silksong, Cuphead, DRAGON BALL FighterZ and others), only Rayman's decision changes. `test_nro_graphics.py` has both cases.
+- **Found on:** Rayman 30th Anniversary Edition (`01007C6025688000`, 1.0.0, SDK 20.5.15, Digital Eclipse): the capture gets 21 shaders in 30 s, the split makes 42, and it plays with picture and sound at 60 fps.
 
 ### Which GL functions a game calls
 
