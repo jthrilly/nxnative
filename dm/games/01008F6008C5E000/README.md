@@ -36,6 +36,19 @@ Update 4.0.0 (v786432) over the base game, SDK 13.3.13. Game Freak's Trinity eng
 
 - The Mac app: `scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> --platform mac-app`; its host log is `~/Library/Logs/nxnative/01008F6008C5E000.log`. The first launch after a build shows nothing for about 70 s before its first frame (seen with the pipeline archive already in place, so not its writing; the cause is not traced); later launches reach it in about 2 s.
 - A fresh save into the player's room, driven through `DM_CTL` with `DM_KBD=<name>` answering the name keyboard: the language select at about 30 s (`A`), the look picker at about 50 s (it takes the left stick: `LLeft~0.3`, then `A`), the enrollment application (`A`), then `A` every 3 to 4 s through the opening (about 4 minutes, past the autosave) until "Get Up" (`LUp~1.5`). From there the stick walks the player around the room and `X` opens the main menu. A later launch loads that save from the title screen (`A`, about 25 s into the room). The stairs are entered from the green mat at the top-left of the stairwell: from the loaded save's position `LLeft~3`, `LUp~5`, `LLeft~4` reaches their top and `LDown~5` the house's ground floor.
+- The work folder's `run/boot.sh <name> [seconds] [VAR=value ...]` runs the
+  build headless with its own host copy (`build/vihost`), the build's pipeline
+  archive (`DM_PSO_ARCHIVE`, the `_build/run/pso_archive` the NSP script
+  prebuilt; without it a run from another folder prebuilds 24,487 pairs again
+  before the first frame) and `DM_PRESENT_LINK=0`. Without the latter, a
+  window covered mid-run presents about once a second and the game ran at
+  about 12 fps.
+- **Observed, not a fault:** holding the right stick toward the wall by the
+  bed turns the camera into the wall: about 90 frames (3 s) are black (the void
+  behind the room set) with the wall's lit edge at the right, while the
+  "Now saving" overlay keeps drawing, and the camera comes back when the
+  player moves. This looks like the game's own camera collision; it has not
+  been compared with a Switch.
 
 ## Found on this game
 
@@ -53,3 +66,6 @@ Per-build cuts on this game's SDK 13.3.13 build (`sdk_patches.py`): [The SDK's a
 - The 70 s first launch after a build (above).
 - The Pokémon GO link's other `nn::bluetooth` calls are unhooked; opening that menu would abort in the SDK's client.
 - The block-linear image atomics and the command memory lends above.
+- [The freeze in Trinity's rendezvous](../../../docs/reference/threads.md#trinitys-rendezvous-loses-its-release-on-apple-cores)
+  was reported here too, by its return addresses only; whether this build's
+  completer matches the rewriter's rule is unchecked.
