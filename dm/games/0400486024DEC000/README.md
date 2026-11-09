@@ -143,6 +143,7 @@ From an empty save: at about 45 s `A` (title), `A` (New Game), then the movie. F
 - [`nn::ndve`'s movie enhancement file](../../../docs/reference/shaders.md#nnndves-movie-enhancement-file)
 - [Task and mesh shaders in BNSH, and indirect mesh draws](../../../docs/reference/shaders.md#task-and-mesh-shaders-in-bnsh-and-indirect-mesh-draws)
 - [Indirect task / mesh draws on the encode thread](../../../docs/reference/rendering.md#indirect-task--mesh-draws-on-the-encode-thread): the iOS app aborted when a save loaded.
+- [Mesh draws with no task shader above 1024 workgroups](../../../docs/reference/rendering.md#mesh-draws-with-no-task-shader-above-1024-workgroups): GPU page faults 30-40 s after a save loaded (issue #1326), from foliage mesh draws of up to 1,771 workgroups.
 - [F2IP](../../../docs/reference/shaders.md#f2ip)
 - [A pixel shader's depth after a partly written target](../../../docs/reference/shaders.md#a-pixel-shaders-depth-after-a-partly-written-target): 46 depth-writing pixel shaders read their depth from the wrong register, agl_common's depth pass among them.
 - [An HMMA outside a chain overwrote the chain's accumulator](../../../docs/reference/shaders.md#an-hmma-outside-a-chain-overwrote-the-chains-accumulator): dotted rows across fog and light in play.
@@ -176,3 +177,6 @@ From an empty save: at about 45 s `A` (title), `A` (New Game), then the movie. F
 - [Render targets that move with the dynamic resolution get new Metal memory each time](../../../docs/reference/rendering.md#render-targets-that-move-with-the-dynamic-resolution-get-new-metal-memory-each-time): the targets in the 305 MB pool, recycled since #1831.
 - [Pixel shader inputs the mesh shader does not write](../../../docs/reference/shaders.md#pixel-shader-inputs-the-mesh-shader-does-not-write): the foliage point meshes' pipelines (pixel shaders reading generic attribute 5 that no mesh output writes).
 - [Mesh outputs as wide as their pixel shaders read](../../../docs/reference/shaders.md#mesh-outputs-as-wide-as-their-pixel-shaders-read): the foliage mesh `626fbf48041cb82b`, padded to 35,840 bytes of mesh output, past Metal's 32 KB.
+- [AV1 movies stop an M1 iPad with SIGILL in dav1d](../../../docs/reference/movies.md#av1-movies-stop-an-m1-ipad-with-sigill-in-dav1d): the title movie on an M1 iPad Pro.
+- [`devicectl` copies a large RomFS image through the Mac's memory](../../../docs/reference/packing.md#devicectl-copies-a-large-romfs-image-through-the-macs-memory): the 26.2 GB image's pushes to an iPad filled a 16 GB Mac's swap and failed; now sent over AFC.
+- [`devicectl`'s `--remove-existing-content` empties the app's whole container](../../../docs/reference/packing.md#devicectls---remove-existing-content-empties-the-apps-whole-container): the first complete copy of the image, deleted by the DLC step after it.
