@@ -15,7 +15,8 @@ CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include -I$(dir $(GAME_H)) -I$
 GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../tex/*.c ../tex/*.m)))
 GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/include/*.h ../tex/*.h) $(GAME_H) $(MSL_H)
 .DEFAULT_GOAL := t_nvn   # the profile header rule comes first, so keep the default goal as before
-$(GAME_H):
+# Regenerated on every make (host_msl_force), by the host Makefile: a header from an older game.py lacks newer defines; game.py writes it only when it changes, so an unchanged header rebuilds no test
+$(GAME_H): host_msl_force
 	$(MAKE) -C ../../host game_profile GAME=$(GAME)
 $(MSL_H): $(wildcard ../msl/*.metal) ../tools/host_msl.py host_msl_force
 	$(MAKE) -C ../../host host_msl GAME=$(GAME)
@@ -422,6 +423,9 @@ t_integer_blend: t_integer_blend.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_integer_blend.m $(MTL_T_SRC) $(FW)
 t_missing_src1: t_missing_src1.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_missing_src1.m $(MTL_T_SRC) $(FW)
+t_clear_msaa: t_clear_msaa.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_clear_msaa.m $(MTL_T_SRC) $(FW)
+check_t_clear_msaa: RUN_ENV = MTL_DEBUG_LAYER=1
 check_t_integer_blend: RUN_ENV = MTL_DEBUG_LAYER=1
 check_t_missing_src1: RUN_ENV = MTL_DEBUG_LAYER=1
 t_omap_mask: t_omap_mask.m $(MTL_T_DEP)
