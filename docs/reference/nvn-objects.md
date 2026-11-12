@@ -229,6 +229,14 @@ A game may tell NVN objects apart by their bytes, without an NVN call. A host re
 - **Cause:** a game that records transient render targets and finalizes them before it submits: replay put the dead serials back into `g_by_serial`.
 - **Fix:** dead serials go to a 512-entry table (`tex_put`, `g_ghost`; the memory line's `finalized textures still referenced`).
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) (the HUD captures, the 640×360 buffers; found while fixing GitHub issue #9).
+- **Note:** the tables are `nvn_owner.m`'s (dm/gfx/README.md). `t_serial_owner` holds them to their behaviour, linked with the owner alone: live registration, replacement and removal, where `tex_put` sends a serial (live table for a live texture object or an external texture, ghost ring for a finalized one), finalizing, ring eviction at 512, texture and program pins, a view's entry counting its parent, and the held counts (`g_by_serial_held`, `g_ghost_held`, pins included) against the tables after every step.
+
+### A finalized twin view left in the ghost ring
+
+- **Symptom:** none seen on a game. A finalized texture can resolve to an sRGB / linear view of storage that no longer holds its bytes.
+- **Cause:** the twin path of `tex_mtl_` puts the view it made for a finalized serial with `tex_put`, which sends a finalized serial to the ghost ring; when the shared texture left the sharing table meanwhile, it drops the view with `serial_del` (`nvn_owner.m`), which removes only a live entry. The ghost entry stays, and holds the view. The next `tex_put` of the serial normally replaces it a few lines later; it stays when making the texture's own one fails (`tex_mtl_` returns nil), and another thread can resolve it in between.
+- **Fix:** open. `DM_TEST_SERIAL_TWIN=1 ./t_serial_owner` reproduces it at the table level (without the switch the run prints what it finds and counts no failure).
+- **Found on:** no game; found in a review of the serial tables.
 
 ### A replay's own objects take serials above a capture's
 
@@ -288,6 +296,13 @@ A game may tell NVN objects apart by their bytes, without an NVN call. A host re
 - **Cause:** the calls were not implemented. The driver's getters write the size to `*size` and return whether it was set (`ldr w8, [x0, #0x2c]; str w8, [x1]; ldrb w0, [x0, #0x24]`); the stub returns 0 and writes nothing, so a game that copies the sizes into its own queue description keeps what its fields held.
 - **Fix:** the queue builder keeps each size with a set flag (`qb_set`, `qb_get` in `hle_nvn.c`); the getters answer from them, and `GetQueueMemorySize` takes the device defaults for the sizes not set, as before. The ray tracing size is kept and reported only: the host traces no rays.
 - **Found on:** [PRAGMATA](../../dm/games/0400C76024710000/README.md), which reads all four after `SetDefaults` and its setters.
+
+### Float blend clamp (`nvnCommandBufferSetFloatBlendClamp`)
+
+- **Symptom:** `[RED] NVN unimplemented function called: nvnCommandBufferSetFloatBlendClamp`; now `[RED] nvnCommandBufferSetFloatBlendClamp 1 (a float blend result that overflows becomes the largest finite value): Metal stores infinity`, once.
+- **Cause:** an NVN2 call the host did not have. The driver writes its flag into 3D method 0x10b0, which NVIDIA's class headers list only as a reserved software method (`clb197.h`, `clc797.h`: `SET_RESERVED_SW_METHOD03`). The Tegra kernel driver names it: `SET_BES_CROP_DEBUG4` (nvgpu `gr_gp10b_set_bes_crop_debug4`, also the handler of the later chips), whose bit 0 sets the `clamp_fp_blend` field of the register: what a floating-point blend result that overflows becomes, infinity (0, `CLAMP_FP_BLEND_TO_INF`) or the format's largest finite value (1, `CLAMP_FP_BLEND_TO_MAXVAL`).
+- **Fix:** the call exists (`hle_nvn.c`). Metal has no such setting: a blend result above a 16- or 32-bit float target's range is stored as infinity, which is mode 0, so mode 0 is silent and mode 1 logs the red line once. Mode 1 would need every blending pixel shader to read its target and clamp there (a platform limit, left as it is): it differs only where a blend overflows, about 65,504 in a half-float target.
+- **Found on:** [PRAGMATA](../../dm/games/0400C76024710000/README.md), which sets 1; no frame has been seen with an infinity in a float target.
 
 ### Host-lent command memory segments
 
